@@ -304,6 +304,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             chatTextColorArgb  = p[Keys.CHAT_TEXT_COLOR_ARGB]      ?: CHAT_TEXT_COLOR_ARGB_DEFAULT,
             chatBgOverride     = p[Keys.CHAT_BG_OVERRIDE]          ?: CHAT_BG_OVERRIDE_DEFAULT,
             chatBgColorArgb    = p[Keys.CHAT_BG_COLOR_ARGB]        ?: CHAT_BG_COLOR_ARGB_DEFAULT,
+            // #MSG-BUBBLE-COLOR (2026-11): независимый цвет пузыря (рамки сообщения).
+            // msgBubbleColorOverride — тумблер; msgBubbleColorArgb — точный ARGB Int
+            // (0 = не выбран → системный primary/surfaceVariant). Красит ОБА пузыря.
+            msgBubbleColorOverride = p[Keys.MSG_BUBBLE_COLOR_OVERRIDE] ?: MSG_BUBBLE_COLOR_OVERRIDE_DEFAULT,
+            msgBubbleColorArgb    = p[Keys.MSG_BUBBLE_COLOR_ARGB]     ?: MSG_BUBBLE_COLOR_ARGB_DEFAULT,
             // P4.2: LongPoll backfill — восстановление пропущенных между сессиями
             // событий через messages.getLongPollHistory(pts, ts). Fix #339: default true —
             // без backfill'а накопленные за время Doze сообщения теряются и юзер не видит
@@ -977,6 +982,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     /** #CHAT-BACKGROUND: независимый фон диалога. */
     suspend fun setChatBgOverride(v: Boolean)             = put(Keys.CHAT_BG_OVERRIDE, v)
     suspend fun setChatBgColorArgb(v: Int)                = put(Keys.CHAT_BG_COLOR_ARGB, v)
+    /** #MSG-BUBBLE-COLOR: независимый цвет пузыря (рамки сообщения). */
+    suspend fun setMsgBubbleColorOverride(v: Boolean)     = put(Keys.MSG_BUBBLE_COLOR_OVERRIDE, v)
+    suspend fun setMsgBubbleColorArgb(v: Int)             = put(Keys.MSG_BUBBLE_COLOR_ARGB, v)
     /** P4.2: LongPoll backfill — восстановление пропущенных между сессиями событий. */
     suspend fun setMsgLpBackfill(v: Boolean)              = put(Keys.MSG_LP_BACKFILL, v)
     /** P4.1: LongPoll v14 — lp_version=14, mode=1226 (расширенные поля). */
@@ -2125,6 +2133,16 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val chatBgOverride: Boolean = false,
         val chatBgColorArgb: Int = 0,
         /**
+         * #MSG-BUBBLE-COLOR (2026-11): независимый цвет пузыря (рамки сообщения).
+         * msgBubbleColorOverride — тумблер включения; msgBubbleColorArgb — точный
+         * ARGB Int цвета (0 = не выбран → системный primary/surfaceVariant).
+         * Влияет на фон bubble исходящих И входящих сообщений (обоих). В bubble-less
+         * режиме применяется с alpha=0.08 для outgoing, incoming — Transparent.
+         * Дефолт задан явно — прецедент chatBgOverride выше.
+         */
+        val msgBubbleColorOverride: Boolean = false,
+        val msgBubbleColorArgb: Int = 0,
+        /**
          * #PERSIST-LOG (Task 6-LOGGER-INFRA): тумблер «Беспрерывное логирование»
          * (Настройки → Разработка). Default false. При true — PersistentLogger
          * пишет полный лог всего в filesDir/persistent_log.txt, переживает краш
@@ -2257,6 +2275,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val CHAT_TEXT_COLOR_ARGB   = intPreferencesKey("chat_text_color_argb")
         val CHAT_BG_OVERRIDE       = booleanPreferencesKey("chat_bg_override")
         val CHAT_BG_COLOR_ARGB     = intPreferencesKey("chat_bg_color_argb")
+        // #MSG-BUBBLE-COLOR (2026-11): независимый цвет пузыря (рамки сообщения).
+        val MSG_BUBBLE_COLOR_OVERRIDE = booleanPreferencesKey("msg_bubble_color_override")
+        val MSG_BUBBLE_COLOR_ARGB     = intPreferencesKey("msg_bubble_color_argb")
         // P4.1: LongPoll v14 — lp_version=14, mode=1226
         val MSG_LP_V14             = booleanPreferencesKey("msg_lp_v14")
         // §52.5 Sprint A (P0): Modern Sync API — messages.getDiff (lp_version=21)
@@ -2515,6 +2536,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         const val CHAT_TEXT_COLOR_ARGB_DEFAULT = 0
         const val CHAT_BG_OVERRIDE_DEFAULT = false
         const val CHAT_BG_COLOR_ARGB_DEFAULT = 0
+        // #MSG-BUBBLE-COLOR (2026-11): дефолты цвета пузыря. 0 = «не переопределять».
+        const val MSG_BUBBLE_COLOR_OVERRIDE_DEFAULT = false
+        const val MSG_BUBBLE_COLOR_ARGB_DEFAULT = 0
         // Размеры шрифта текста диалога (в sp), индекс = CHAT_FONT_SIZE_INDEX.
         val CHAT_FONT_SIZES_SP: List<Int> = listOf(12, 13, 14, 15, 16, 17, 18, 20, 22, 24)
         const val AUTH_OAUTH_HOST_DEFAULT      = "oauth.vk.ru"

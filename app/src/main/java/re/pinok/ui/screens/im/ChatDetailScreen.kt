@@ -1128,7 +1128,14 @@ fun ChatDetailScreen(
         } else {
             null
         }
-        ChatAppearance(textColor = textColor, fontSizeSp = sizeSp, bgColor = bgColor)
+        // #MSG-BUBBLE-COLOR: цвет пузыря (рамки сообщения) — ARGB Int (0 = не выбран).
+        // Красит ОБА пузыря (исходящий и входящий). Fallback на системный — null.
+        val bubbleColor = if (snap.msgBubbleColorOverride && snap.msgBubbleColorArgb != 0) {
+            Color(snap.msgBubbleColorArgb)
+        } else {
+            null
+        }
+        ChatAppearance(textColor = textColor, fontSizeSp = sizeSp, bgColor = bgColor, bubbleColor = bubbleColor)
     }.collectAsState(initial = ChatAppearance())
 
     // Context для кэша и т.д.
@@ -6396,11 +6403,15 @@ private fun MessageBubble(
     // Poll/Voice) читают LocalAttachmentSelection сами.
     val sel = LocalAttachmentSelection.current
     val isOut = message.isOut
-    val bubbleColor = if (isOut) {
+    // #MSG-BUBBLE-COLOR: если в prefs задан «свой цвет пузыря» — красим ОБА пузыря
+    // (исходящий и входящий) этим цветом. Иначе — системный primary/surfaceVariant.
+    val appearance = LocalChatAppearance.current
+    val sysBubbleColor = if (isOut) {
         MaterialTheme.colorScheme.primary
     } else {
         MaterialTheme.colorScheme.surfaceVariant
     }
+    val bubbleColor = appearance.bubbleColor ?: sysBubbleColor
     // P3.7: в bubble-less режиме текст всегда onSurface (нет яркого bubble-фона).
     // #CHAT-APPEARANCE: если включён независимый шрифт диалога и выбран цвет текста —
     // переопределяем цвет текста сообщения со всех пузырей (исходящих и входящих).
@@ -6626,9 +6637,11 @@ private fun MessageBubble(
         )
         // P3.7: bubble-less режим — flat layout (без Card/bubble), как m.vk.ru.
         // В bubble-less: нет clip/rounded, нет background для incoming, subtle tint для outgoing.
+        // #MSG-BUBBLE-COLOR: если задан «свой цвет пузыря», то для outgoing берём
+        // его с alpha=0.08 (как раньше primary), incoming — Transparent (как сейчас).
         val bubblelessShape = RoundedCornerShape(4.dp)
         val bubblelessBg = if (isOut) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+            (appearance.bubbleColor ?: MaterialTheme.colorScheme.primary).copy(alpha = 0.08f)
         } else {
             androidx.compose.ui.graphics.Color.Transparent
         }
@@ -7279,7 +7292,8 @@ private fun MessageBubble(
                         Icon(
                             imageVector = if (message.isRead) Icons.Filled.DoneAll else Icons.Filled.Done,
                             contentDescription = if (message.isRead) "Прочитано" else "Отправлено",
-                            modifier = Modifier.size(14.dp),
+                            // #MSG-BUBBLE-READMARK: 14dp → 16dp (заметнее галочка прочтения).
+                            modifier = Modifier.size(16.dp),
                             tint = textColor.copy(alpha = 0.7f),
                         )
                     }

@@ -2348,6 +2348,8 @@ private fun MessagesTab(
     // #CHAT-SPECTRUM: состояние открытия диалогов выбора цвета текста и фона диалога.
     var showColorTextDialog by remember { mutableStateOf(false) }
     var showColorBgDialog by remember { mutableStateOf(false) }
+    // #MSG-BUBBLE-COLOR: состояние диалога выбора цвета пузыря (рамки сообщения).
+    var showBubbleColorDialog by remember { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2520,6 +2522,26 @@ private fun MessagesTab(
             }
         }
 
+        // #MSG-BUBBLE-COLOR (2026-11): независимый цвет пузыря (рамки сообщения) —
+        // спектральная палитра. Красит ОБА пузыря (исходящий и входящий).
+        item { SectionHeader("Цвет пузыря (рамки сообщения)") }
+        item {
+            ToggleRow(
+                title = "Свой цвет пузыря",
+                subtitle = "Цвет фона/рамки сообщения, независимый от цветового акцента",
+                checked = s.msgBubbleColorOverride,
+            ) { scope.launch { app.prefs.setMsgBubbleColorOverride(it) } }
+        }
+        if (s.msgBubbleColorOverride) {
+            item {
+                re.pinok.ui.components.ColorSwatchRow(
+                    title = "Цвет",
+                    swatchColor = Color(s.msgBubbleColorArgb.takeIf { it != 0 } ?: 0xFFE3F2FD.toInt()),
+                    onClick = { showBubbleColorDialog = true },
+                )
+            }
+        }
+
         item { SectionHeader("Действия с сообщениями") }
         // P2.5: multi-select mode — выделение нескольких сообщений.
         // Fix #244: прямой вход в selection по long-press (без DropdownMenu).
@@ -2583,6 +2605,17 @@ private fun MessagesTab(
             initialColor = Color(s.chatBgColorArgb.takeIf { it != 0 } ?: 0xFFF5F5F5.toInt()),
             onDismiss = { showColorBgDialog = false },
             onApply = { c -> scope.launch { app.prefs.setChatBgColorArgb(c.toArgb()) } },
+        )
+    }
+    // #MSG-BUBBLE-COLOR: диалог выбора цвета пузыря (рамки сообщения).
+    if (showBubbleColorDialog) {
+        re.pinok.ui.components.ColorPickerDialog(
+            initialColor = Color(s.msgBubbleColorArgb.takeIf { it != 0 } ?: 0xFFE3F2FD.toInt()),
+            onDismiss = { showBubbleColorDialog = false },
+            onApply = { c ->
+                scope.launch { app.prefs.setMsgBubbleColorArgb(c.toArgb()) }
+                showBubbleColorDialog = false
+            },
         )
     }
 }

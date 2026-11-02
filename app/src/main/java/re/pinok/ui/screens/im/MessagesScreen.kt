@@ -1359,6 +1359,7 @@ fun MessagesScreen(
                                 // недоступны (результат — ссылка на диалог).
                                 showArchiveAction = false,
                                 showListActions = false,
+                                readReceiptsEnabled = s.msgReadReceipts,
                                 onClick = { onChatClick(chat) },
                             )
                         }
@@ -1367,6 +1368,7 @@ fun MessagesScreen(
                                 chat = chat,
                                 showArchiveAction = false,
                                 showListActions = false,
+                                readReceiptsEnabled = s.msgReadReceipts,
                                 onClick = { onChatClick(chat) },
                             )
                         }
@@ -1434,6 +1436,7 @@ fun MessagesScreen(
                                 isArchived = true,
                                 // Fix #356: вне основного списка — только «Вернуть из архива».
                                 showListActions = false,
+                                readReceiptsEnabled = s.msgReadReceipts,
                                 onArchiveConversation = { peerId -> onUnarchiveConversationLocal(peerId) },
                                 // В архиве drag&drop/pin-логика не имеет смысла.
                                 onDragSwap = { _, _ -> },
@@ -1686,6 +1689,7 @@ fun MessagesScreen(
                                 // ниже — no-op) → долгий тап не открывает меню мёртвых
                                 // пунктов (no-stub UI); закрепить «Избранное» невозможно.
                                 showListActions = false,
+                                readReceiptsEnabled = s.msgReadReceipts,
                                 onClick = { onChatClick(favoritesChat) },
                                 onMarkAsRead = { _, _ -> },
                                 // P1.3: 3-й параметр untilSec (-1=forever, >0=timestamp).
@@ -1731,6 +1735,7 @@ fun MessagesScreen(
                             chat = chat,
                             isPinned = isPinned,
                             typingText = typingText,
+                            readReceiptsEnabled = s.msgReadReceipts,
                             onClick = { onChatClick(chat) },
                             onMarkAsRead = { peerId, lastMsgId ->
                                 // §44 #DNR-MARK-READ-UX: при включённом DNR («не читалка»)
@@ -2164,6 +2169,10 @@ private fun ChatCard(
     isArchived: Boolean = false,
     showArchiveAction: Boolean = true,
     showListActions: Boolean = true,
+    // #MSG-BUBBLE-READMARK (2026-11): гейт галочки ✓✓ в превью последнего сообщения
+    // списка бесед на msgReadReceipts (симметрия с чатом ChatDetailScreen :898-899).
+    // Default true — backward-compat для вызовов, не передающих параметр.
+    readReceiptsEnabled: Boolean = true,
     onArchiveConversation: (peerId: Long) -> Unit = { _ -> },
     onDragSwap: (fromIdx: Int, toIdx: Int) -> Unit = { _, _ -> },
     pinnedPeerIdsInOrder: List<Long> = emptyList(),
@@ -2205,7 +2214,7 @@ private fun ChatCard(
     // Fix #282: read checkmarks для исходящего последнего сообщения.
     // outRead = ID последнего ИСХОДЯЩЕГО сообщения, прочитанного собеседником.
     // lastMessage.id <= outRead → прочитано (✓✓ primary), иначе отправлено (✓ outline).
-    val showOutCheckmarks = lastMessage != null && lastMessage.isOut && !lastMessage.isAction
+    val showOutCheckmarks = lastMessage != null && lastMessage.isOut && !lastMessage.isAction && readReceiptsEnabled
     // Fix warn: null-проверка должна идти первой, чтобы (а) не быть избыточной
     // (showOutCheckmarks уже гарантирует lastMessage != null) и (б) включить
     // smart-cast lastMessage к non-null для доступа к .id в том же &&-цепочке.

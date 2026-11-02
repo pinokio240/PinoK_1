@@ -11,6 +11,10 @@ data class ChatAppearance(
     val textColor: Color? = null,
     val fontSizeSp: Float? = null,
     val bgColor: Color? = null,
+    // #MSG-BUBBLE-COLOR (2026-11): независимый цвет пузыря (рамки сообщения).
+    // null = не переопределять (системный primary/surfaceVariant). Применяется
+    // к ОБЕИМ bubble (исходящая и входящая) в MessageBubble.
+    val bubbleColor: Color? = null,
 )
 
 // Дефолт = всё null (переопределение выключено -> системные значения).
