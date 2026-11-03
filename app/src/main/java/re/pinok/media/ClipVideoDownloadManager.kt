@@ -424,7 +424,7 @@ object ClipVideoDownloadManager {
 
     /**
      * Map fileKey → (url, kind). null если ключа нет/blank/неизвестный kind.
-     * kind: [KIND_MP4] (mp4_*/mp4_orig), [KIND_HLS] (hls/hls_fmp4/hls_ondemand),
+     * kind: [KIND_MP4] (mp4_* и mp4_orig), [KIND_HLS] (hls/hls_fmp4/hls_ondemand),
      * [KIND_DASH] (dash*) — для FAILED-обработки в [enqueueDownloadInternal].
      */
     private fun pickSourceByKey(files: Map<String, String>?, fileKey: String): Pair<String, String>? {
