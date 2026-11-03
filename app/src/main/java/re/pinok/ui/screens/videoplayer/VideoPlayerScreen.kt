@@ -174,6 +174,8 @@ import re.pinok.data.model.Video
 import re.pinok.data.model.VideoPlatform
 import re.pinok.data.model.VideoQuality
 import re.pinok.data.model.UserProfile
+// DL-D (Wave 2) #VIDEO-DOWNLOAD-SHEET: probeSize — размеры mp4-опций в шторке «Скачать».
+import re.pinok.media.HlsDownloadSupport
 import re.pinok.media.PlayerConnection
 import re.pinok.media.VideoDownloadManager
 import re.pinok.media.VideoPlayerConfig
@@ -477,6 +479,11 @@ fun VideoPlayerScreen(
     // Шторки действий — доступны и в портрете, и в fullscreen/landscape.
     var showCommentsSheet by remember { mutableStateOf(false) }
     var showShareSheet by remember { mutableStateOf(false) }
+    // DL-D (Wave 2) #VIDEO-DOWNLOAD-SHEET: шторка выбора качества скачивания.
+    // qualityVideo — снапшот Video на момент открытия: опции/размеры шторки
+    // стабильны, даже если fresh-resolve обновит resolvedVideo пока шторка открыта.
+    var showQualitySheet by remember { mutableStateOf(false) }
+    var qualityVideo by remember { mutableStateOf<Video?>(null) }
 
     // ── W30-2 #VIDEO-ADD-TO-MINE / #VIDEO-MORE-MENU (паритет футера VK web) ──
     // Мой userId — паттерн #AUDIO-TOGGLE-OWNING (AudioPlayerScreen :553):
@@ -1883,10 +1890,31 @@ fun VideoPlayerScreen(
         }
     }
 
-    // #VIDEO-MORE-DOWNLOAD: «Ещё» → «Скачать» — тот же VideoDownloadManager
-    // .enqueueDownload, что в TopAppBar и VideoScreen (:497). Честные
-    // предупреждения: без прямой mp4-ссылки менеджер молча откажется —
-    // предупреждаем заранее; повторный тап не дублирует загрузку.
+    // #VIDEO-MORE-DOWNLOAD (DL-D, Wave 2): «Ещё» → «Скачать» — НЕ немедленная
+    // закачка top-качества (старое VideoDownloadManager.enqueueDownload(video)),
+    // а шторка выбора качества VideoDownloadSheet (порт списка кандидатов
+    // VK-Video-Downloader-4.js). Честные предупреждения остаются: уже скачано /
+    // идёт загрузка; без скачиваемых файлов (mp4_* / hls*) — прежний тост.
+    // YouTube/OK/EXTERNAL_IFRAME (files пуст, URL достаётся через WebView /
+    // enqueueUrlDownload в OkWebViewPlayer) — прежний тост, ничего не ломаем.
+    fun hasDownloadableFiles(): Boolean {
+        val files = resolvedVideo.files ?: return false
+        return files.entries.any { (key, url) ->
+            !url.isNullOrBlank() &&
+                (key.startsWith("mp4_") || key in HLS_FILE_KEYS)
+        }
+    }
+
+    // Общая точка входа TopAppBar и меню «Ещё»: открыть шторку качеств.
+    fun openDownloadSheet() {
+        if (!hasDownloadableFiles()) {
+            toast("Нет прямой ссылки — скачивание недоступно")
+            return
+        }
+        qualityVideo = resolvedVideo
+        showQualitySheet = true
+    }
+
     fun downloadFromMenu() {
         val ds = downloadState
         if (ds != null && ds.isCompleted) {
@@ -1897,14 +1925,7 @@ fun VideoPlayerScreen(
             toast("Загрузка уже идёт")
             return
         }
-        val files = resolvedVideo.files
-        val hasDirect = files != null && files.keys.any { it.startsWith("mp4_") }
-        if (!hasDirect) {
-            toast("Нет прямой ссылки — скачивание недоступно")
-            return
-        }
-        VideoDownloadManager.enqueueDownload(resolvedVideo)
-        toast("Загрузка началась")
+        openDownloadSheet()
     }
 
     // #VIDEO-REPORT: «Ещё» → «Пожаловаться» — video.report (W30-API),
@@ -2004,7 +2025,9 @@ fun VideoPlayerScreen(
                             if (downloadState != null && downloadState.status != DownloadStatus.FAILED) {
                                 VideoDownloadManager.removeDownload(resolvedVideo.ownerId, resolvedVideo.id)
                             } else {
-                                VideoDownloadManager.enqueueDownload(resolvedVideo)
+                                // DL-D (Wave 2): шторка выбора качества вместо
+                                // немедленной закачки top-качества.
+                                openDownloadSheet()
                             }
                         }) {
                             when {
@@ -2872,6 +2895,18 @@ fun VideoPlayerScreen(
             onDismiss = { showShareSheet = false },
         )
     }
+    // DL-D (Wave 2) #VIDEO-DOWNLOAD-SHEET: шторка выбора качества скачивания
+    // (рядом с прочими шторками плеера — ModalBottomSheet рендерится в своём окне,
+    // расположение в композиции не влияет, см. комментарий выше).
+    if (showQualitySheet) {
+        val qv = qualityVideo
+        if (qv != null) {
+            VideoDownloadSheet(
+                video = qv,
+                onDismiss = { showQualitySheet = false },
+            )
+        }
+    }
 
     // W30-2 #VIDEO-REPORT: confirm-диалог «Пожаловаться» — на уровне композабла
     // экрана, не внутри скролл-контейнеров/меню (урок #PIN-DIALOG-OVERLAY).
@@ -3529,7 +3564,9 @@ private fun VideoStripAction(
  * immersive-стрипа. Все действия — реальный API без заглушек:
  *  - «В закладки / Убрать из закладки»: faveAdd/faveRemove type="video"
  *    (VKApiClient маппит в fave.addVideo/fave.removeVideo — #FAVE-WEB-TOKEN);
- *  - «Скачать»: VideoDownloadManager.enqueueDownload (паттерн VideoScreen :497);
+ *  - «Скачать»: DL-D (Wave 2) — шторка выбора качества VideoDownloadSheet
+ *    (downloadFromMenu → openDownloadSheet); раньше было немедленное
+ *    VideoDownloadManager.enqueueDownload(video) топ-качества;
  *  - «Пожаловаться»: confirm-диалог на уровне экрана → video.report (W30-API);
  *  - «Копировать ссылку»: ClipboardManager (паттерн VideoShareSheet);
  *  - «Удалить у себя»: videoDelete моей копии (removeMineCopy).
@@ -4109,6 +4146,230 @@ private fun VideoQuickShareButton(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface,
         )
+    }
+}
+
+// ── DL-D (Wave 2) #VIDEO-DOWNLOAD-SHEET ─────────────────────────────────────
+// Шторка выбора качества скачивания — порт списка кандидатов из
+// VK-Video-Downloader-4.js (меню качеств с размерами файлов). Вместо
+// немедленной закачки top-качества юзер выбирает вариант; тап →
+// VideoDownloadManager.enqueueDownload(video, fileKey) — контракт DL-B.
+
+/** Вид кандидата в шторке скачивания. */
+private data class VideoDownloadOption(
+    val fileKey: String, // ключ из Video.files: «mp4_1080», «hls_ondemand», …
+    val kind: Kind,
+    val label: String,   // «1080p» / «HLS (поток)»
+    val url: String,
+    // Первый (высший) mp4 — визуальная метка «рекоменд.» (умолчание совпадает со
+    // старым enqueueDownload(video), который брал высшее доступное mp4_).
+    val recommended: Boolean = false,
+) {
+    enum class Kind { MP4, HLS }
+}
+
+// HLS-ключи в приоритете; в шторку попадает только ПЕРВЫЙ найденный (один пункт).
+private val HLS_FILE_KEYS = listOf("hls_ondemand", "hls_fmp4", "hls")
+
+// Порядок mp4-качеств по убыванию (VK отдаёт mp4_144…mp4_2160).
+private val MP4_HEIGHT_ORDER = listOf("2160", "1440", "1080", "720", "480", "360", "240", "144")
+
+/**
+ * Список скачиваемых кандидатов из [Video.files]: mp4_* по убыванию качества +
+ * один пункт для первого найденного HLS-ключа. dash*/прочее — пропущены:
+ * DASH-сборка в VideoDownloadManager НЕ реализована (вернул бы FAIL) — честно
+ * не показываем dash как скачиваемый. Пустой/null files → пустой список.
+ */
+private fun buildVideoDownloadOptions(files: Map<String, String>?): List<VideoDownloadOption> {
+    if (files.isNullOrEmpty()) return emptyList()
+    val options = ArrayList<VideoDownloadOption>()
+    var firstMp4 = true
+    for (h in MP4_HEIGHT_ORDER) {
+        val key = "mp4_$h"
+        val url = files[key]
+        if (!url.isNullOrBlank()) {
+            options += VideoDownloadOption(
+                fileKey = key,
+                kind = VideoDownloadOption.Kind.MP4,
+                label = "${h}p",
+                url = url,
+                recommended = firstMp4,
+            )
+            firstMp4 = false
+        }
+    }
+    val hlsKey = HLS_FILE_KEYS.firstOrNull { !files[it].isNullOrBlank() }
+    if (hlsKey != null) {
+        options += VideoDownloadOption(
+            fileKey = hlsKey,
+            kind = VideoDownloadOption.Kind.HLS,
+            label = if (hlsKey == "hls_fmp4") "HLS fMP4 (поток)" else "HLS (поток)",
+            url = files[hlsKey]!!,
+        )
+    }
+    return options
+}
+
+/**
+ * Форматирование размера: «466,3 МБ» / «1,23 ГБ» (ГБ — 2 знака, МБ — 1 знак,
+ * разделитель-запятая); < 1 МБ — целые КБ; null при ошибке/0 → в шторке «—».
+ */
+private fun fmtBytes(bytes: Long): String? {
+    if (bytes <= 0L) return null
+    val mb = bytes / (1024.0 * 1024.0)
+    // Locale.US → десятичная точка; заменяем на запятую — формат не зависит
+    // от локали устройства.
+    fun us(pattern: String, value: Double): String =
+        String.format(java.util.Locale.US, pattern, value).replace('.', ',')
+    return when {
+        mb >= 1024.0 -> us("%.2f", mb / 1024.0) + " ГБ"
+        mb >= 1.0 -> us("%.1f", mb) + " МБ"
+        else -> us("%.0f", bytes / 1024.0) + " КБ"
+    }
+}
+
+/**
+ * DL-D (Wave 2) #VIDEO-DOWNLOAD-SHEET: шторка «Скачать видео» — список качеств
+ * с размерами (порт VK-Video-Downloader-4.js). Паттерн шторки — VideoShareSheet /
+ * VideoCommentsSheet (ModalBottomSheet, surface, заголовок + HorizontalDivider).
+ *
+ * Размеры mp4 — HlsDownloadSupport.probeSize (GET Range: bytes=0-0 →
+ * Content-Range/Content-Length), запуск ТОЛЬКО из LaunchedEffect (не в
+ * composition), последовательно — каждый запрос «копеечный» (Range 1 байт).
+ * Для hls размер неизвестен до сборки — статичный subtitle «сборка в один файл».
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VideoDownloadSheet(
+    video: Video,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val app = SovaApp.get()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    val options = remember(video.files) { buildVideoDownloadOptions(video.files) }
+
+    // Async-размеры mp4-опций: fileKey → bytes. Ошибка/0 → ключ не появляется («—»).
+    var sizeByKey by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    LaunchedEffect(video.files) {
+        val client = app.httpClient
+        for (opt in options) {
+            if (opt.kind != VideoDownloadOption.Kind.MP4) continue // hls: до сборки неизвестен
+            val size = HlsDownloadSupport.probeSize(opt.url, client)
+            if (size > 0L) sizeByKey = sizeByKey + (opt.fileKey to size)
+        }
+    }
+
+    // Защитный путь: после фильтра пусто (например, только dash*) → честный
+    // тост, шторку не оставляем пустой.
+    LaunchedEffect(options) {
+        if (options.isEmpty()) {
+            android.widget.Toast.makeText(
+                context,
+                "Нет доступных форматов для скачивания",
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+            onDismiss()
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(modifier = Modifier.padding(bottom = 12.dp)) {
+            // Заголовок — паттерн VideoShareSheet.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Download,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Скачать видео",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismiss) { Text("Закрыть") }
+            }
+            HorizontalDivider()
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp),
+                contentPadding = PaddingValues(vertical = 4.dp),
+            ) {
+                items(options, key = { it.fileKey }) { opt ->
+                    val subtitle = when (opt.kind) {
+                        VideoDownloadOption.Kind.HLS -> "сборка в один файл"
+                        VideoDownloadOption.Kind.MP4 -> fmtBytes(sizeByKey[opt.fileKey]) ?: "—"
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                // DL-B: НОВЫЙ контракт enqueueDownload(video, fileKey) —
+                                // качество выбирает юзер, а не топ по умолчанию.
+                                VideoDownloadManager.enqueueDownload(video, opt.fileKey)
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Загрузка начата",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                                onDismiss()
+                            }
+                            .padding(horizontal = 24.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Download,
+                            contentDescription = null,
+                            tint = if (opt.recommended) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = opt.label,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (opt.recommended) {
+                            Box(
+                                modifier = Modifier
+                                    .background(
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                        RoundedCornerShape(6.dp),
+                                    )
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                            ) {
+                                Text(
+                                    text = "рекоменд.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -5,7 +5,9 @@ import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,7 +50,7 @@ import java.util.concurrent.TimeUnit
  * - Ключ: `"c_${ownerId}_${videoId}"` (prefix `c_` = clip). Не коллизирует с
  *   catalog videos (`"${ownerId}_${videoId}"` в `video_downloads/`) и stories
  *   (`"s_${ownerId}_${storyId}"` в `story_video_downloads/`).
- * - Файлы: `${key}.mp4` (видео) + `${key}.mp4.tmp` (partial, Range-resume)
+ * - Файлы: `${key}.mp4` (видео) / `${key}.ts` (HLS→MPEG-TS, DL-C) + `${key}.mp4.tmp` (partial, Range-resume)
  *   + `${key}.meta` (JSON sidecar [ClipVideoMeta]).
  *
  * ## TTL eviction
@@ -65,6 +67,15 @@ import java.util.concurrent.TimeUnit
  * вызываем [refreshClipUrl] — ре-фетч `video.get?videos=ownerId_videoId_accessKey`
  * для свежего `files[]`.
  *
+ * ## HLS/DASH-источники (DL-C, Wave 2)
+ * [pickClipSource] (НЕ `bestPlayUrl` — тот отдаёт .m3u8/.mpd как «URL файла»)
+ * возвращает (url, kind): mp4_* качается напрямую (с `bytes=` параметром —
+ * [HlsDownloadSupport.withBytes]); hls_ondemand/hls_fmp4/hls — манифест через
+ * [downloadHls] (single-file fMP4 → один Range-запрос; иначе последовательная
+ * сборка сегментов, 3 retry/сегмент; container-detect → .mp4/.ts); dash* —
+ * явный FAILED с [DASH_FAIL_REASON] (не тихий skip). Прогресс HLS — по
+ * сегментам (done/total).
+ *
  * ## Auto-cache-on-play
  * [enqueueDownload] с `silent=true` — для auto-cache при первом просмотре в
  * ClipsFeedScreen (mirror `StoryVideoDownloadManager.enqueueDownload(silent=true)`
@@ -80,6 +91,12 @@ object ClipVideoDownloadManager {
     // §37.12 #329: clips — мягкий TTL 7 дней (604800000 ms). Stories имеют 24h,
     // но clips живут дольше на стороне VK. Чистим для освобождения места.
     private const val CLIP_TTL_MS = 7L * 24 * 60 * 60 * 1000  // 7 days
+
+    // DL-C (Wave 2): kind-таги источника из [pickClipSource] + причина FAIL для DASH-only.
+    private const val KIND_MP4 = "mp4"
+    private const val KIND_HLS = "hls"
+    private const val KIND_DASH = "dash"
+    private const val DASH_FAIL_REASON = "DASH-поток недоступен для скачивания в этой версии"
 
     @Volatile
     private var initialized = false
@@ -136,8 +153,8 @@ object ClipVideoDownloadManager {
     /**
      * Поставить clip в очередь загрузки.
      *
-     * @param video        объект Video (isClips=1). Должен иметь `bestPlayUrl != null`
-     *                     (mp4_720/mp4_480/.../hls или хотя бы player).
+     * @param video        объект Video (isClips=1). Должен иметь files[] с mp4/hls
+     *                     источником (см. [pickClipSource]); DASH-only → FAILED.
      * @param authorName   имя автора/группы (для отображения в OfflineManager + sidecar).
      * @param authorAvatar аватар автора (для UI).
      * @param silent       `true` = auto-cache (skip foreground notification).
@@ -151,19 +168,15 @@ object ClipVideoDownloadManager {
     ) {
         ensureInitialized()
 
-        val url = video.bestPlayUrl
-        if (url == null) {
-            AppLog.w(TAG, "enqueueDownload: clip #${video.id} has no play URL (files=${video.files?.size ?: 0})")
+        // DL-C (Wave 2): НЕ `bestPlayUrl` — тот отдаёт .m3u8/.mpd-манифесты как
+        // «URL файла» (пользователь получал текст вместо видео) и падает на
+        // player-HTML. Скачиванию нужен свой порядок + kind (см. [pickClipSource]).
+        val src = pickClipSource(video.files)
+        if (src == null) {
+            AppLog.w(TAG, "enqueueDownload: clip #${video.id} has no downloadable URL (files=${video.files?.size ?: 0})")
             return
         }
-        // §37.12 #329: defensive — `bestPlayUrl` falls back to `player` (HTML
-        // страница плеера) когда files[] пустой. Скачивать HTML нет смысла.
-        // В этом случае ждём, пока ClipsRepository подтянет свежий files[]
-        // через shortVideo.get (см. refreshClipUrl на 403).
-        if (video.files == null && url == video.player) {
-            AppLog.w(TAG, "enqueueDownload: clip #${video.id} only has player HTML (no files[]) — skip")
-            return
-        }
+        val (url, kind) = src
 
         val key = clipKey(video.ownerId, video.id)
         synchronized(this) {
@@ -173,7 +186,22 @@ object ClipVideoDownloadManager {
                 return
             }
 
-            AppLog.i(TAG, "enqueueDownload: clip #${video.id} (silent=$silent, $url)")
+            // DL-C: DASH-манифест нельзя скачать как файл — явный FAIL, не тихий skip.
+            if (kind == KIND_DASH) {
+                AppLog.w(TAG, "enqueueDownload: clip #${video.id} DASH-only — FAILED ($DASH_FAIL_REASON)")
+                updateState(key, DownloadState(
+                    trackId = video.id,
+                    status = DownloadStatus.FAILED,
+                    progress = 0,
+                    reason = DASH_FAIL_REASON,
+                    title = video.title.ifBlank { authorName ?: "Клип ${video.ownerId}" },
+                    artist = authorName ?: "",
+                    ownerId = video.ownerId,
+                ))
+                return
+            }
+
+            AppLog.i(TAG, "enqueueDownload: clip #${video.id} (silent=$silent, kind=$kind, $url)")
             val title = video.title.ifBlank { authorName ?: "Клип ${video.ownerId}" }
             updateState(key, DownloadState(
                 trackId = video.id,
@@ -189,7 +217,7 @@ object ClipVideoDownloadManager {
 
         val job = scope.launch {
             try {
-                downloadFile(key, video, authorName, authorAvatar, url)
+                downloadFile(key, video, authorName, authorAvatar, url, kind)
             } catch (ce: kotlinx.coroutines.CancellationException) {
                 throw ce
             } catch (t: Throwable) {
@@ -223,6 +251,10 @@ object ClipVideoDownloadManager {
 
         File(downloadDir, "$key.mp4").delete()
         File(downloadDir, "$key.mp4.tmp").delete()
+        // DL-C: HLS-результат может быть .ts (+ temp сборки "$key.hls.tmp").
+        File(downloadDir, "$key.ts").delete()
+        File(downloadDir, "$key.ts.tmp").delete()
+        File(downloadDir, "$key.hls.tmp").delete()
         deleteMetadata(key)
 
         removeState(key)
@@ -242,9 +274,8 @@ object ClipVideoDownloadManager {
 
     fun getLocalFile(ownerId: Long, videoId: Long): File? {
         ensureInitialized()
-        val key = clipKey(ownerId, videoId)
-        val file = File(downloadDir, "$key.mp4")
-        return if (file.exists()) file else null
+        // DL-C: .mp4 (прогрессивные) или .ts (HLS→MPEG-TS результат).
+        return localCacheFile(clipKey(ownerId, videoId))
     }
 
     /**
@@ -305,8 +336,8 @@ object ClipVideoDownloadManager {
             if (parts.size != 2) continue
             val ownerId = parts[0].toLongOrNull() ?: continue
             val videoId = parts[1].toLongOrNull() ?: continue
-            val file = File(downloadDir, "$key.mp4")
-            if (!file.exists()) continue
+            // DL-C: файл может быть .ts (HLS-результат).
+            val file = localCacheFile(key) ?: continue
             val meta = loadMetadata(key)
             cached += Cached(key, ownerId, videoId, meta?.downloadedAt ?: file.lastModified(), file.length())
             totalSize += file.length()
@@ -344,6 +375,32 @@ object ClipVideoDownloadManager {
         _downloads.value = _downloads.value - key
     }
 
+    /**
+     * DL-C (Wave 2): выбор источника скачивания clip'а — (url, kind).
+     * Замена `video.bestPlayUrl` для СКАЧИВАНИЯ (Models.kt не редактируется:
+     * bestPlayUrl остаётся для плеера). Приоритет:
+     * mp4_1080 → mp4_144 (+ mp4_orig — как в bestPlayUrl) → hls_ondemand →
+     * hls_fmp4 → hls → dash*.
+     *
+     *  - "mp4"  — прогрессивный MP4: качается напрямую (Range-resume + `bytes=`
+     *             параметр [HlsDownloadSupport.withBytes]);
+     *  - "hls"  — манифест .m3u8: НЕЛЬЗЯ сохранять как файл — качается через
+     *             [downloadHls] (раньше пользователь получал текст вместо видео);
+     *  - "dash" — DASH-манифест: скачивание не поддерживается, [enqueueDownload]
+     *             ставит FAILED с [DASH_FAIL_REASON];
+     *  - null   — нет известного источника (player-HTML fallback из bestPlayUrl
+     *             сюда не попадает — для скачивания он бесполезен).
+     */
+    private fun pickClipSource(files: Map<String, String>?): Pair<String, String>? {
+        if (files == null) return null
+        fun firstOf(vararg keys: String): String? =
+            keys.firstNotNullOfOrNull { files[it]?.takeIf(String::isNotBlank) }
+        firstOf("mp4_1080", "mp4_720", "mp4_480", "mp4_360", "mp4_240", "mp4_144", "mp4_orig")?.let { return it to KIND_MP4 }
+        firstOf("hls_ondemand", "hls_fmp4", "hls")?.let { return it to KIND_HLS }
+        firstOf("dash_ondemand", "dash", "dash_sep", "dash_webm", "dash_webm_av1")?.let { return it to KIND_DASH }
+        return null
+    }
+
     // ─── Foreground Service ─────────────────────────────────────────
 
     private fun startForegroundService() {
@@ -375,6 +432,7 @@ object ClipVideoDownloadManager {
         authorName: String?,
         authorAvatar: String?,
         initialUrl: String,
+        initialKind: String,
     ) {
         val videoId = video.id
         val ownerId = video.ownerId
@@ -390,18 +448,26 @@ object ClipVideoDownloadManager {
         ))
 
         val tempFile = File(downloadDir, "$key.mp4.tmp")
-        val targetFile = File(downloadDir, "$key.mp4")
 
         var currentUrl = initialUrl
+        var currentKind = initialKind
         val maxRetries = 3
         var attempt = 0
         while (true) {
             attempt++
             try {
-                downloadWithResume(currentUrl, tempFile, key, videoId, ownerId, title)
-                if (!tempFile.renameTo(targetFile)) {
-                    tempFile.copyTo(targetFile, overwrite = true)
-                    tempFile.delete()
+                // DL-C: HLS — сборка в отдельный temp + container-detect (.mp4/.ts);
+                // mp4 — прежний путь с Range-resume.
+                val ext: String
+                if (currentKind == KIND_HLS) {
+                    val hlsTemp = File(downloadDir, "$key.hls.tmp")
+                    val detected = downloadHls(currentUrl, hlsTemp, key, videoId, ownerId, title)
+                    ext = if (detected == "ts") "ts" else "mp4"
+                    finalizeTempFile(hlsTemp, key, ext)
+                } else {
+                    downloadWithResume(currentUrl, tempFile, key, videoId, ownerId, title)
+                    ext = "mp4"
+                    finalizeTempFile(tempFile, key, ext)
                 }
                 saveMetadata(video, authorName, authorAvatar)
                 updateState(key, DownloadState(
@@ -412,7 +478,7 @@ object ClipVideoDownloadManager {
                     artist = authorName ?: "",
                     ownerId = ownerId,
                 ))
-                AppLog.i(TAG, "Clip video key=$key downloaded (attempt $attempt)")
+                AppLog.i(TAG, "Clip video key=$key downloaded as .$ext (attempt $attempt)")
                 // §37.12 #329 Risk #4: LRU eviction после каждой загрузки.
                 // Используем storyCacheLimitMb как лимит по умолчанию (RESEARCH-1
                 // рекомендует отдельный clipCacheLimitMb=300, но пока отдельного
@@ -432,7 +498,8 @@ object ClipVideoDownloadManager {
                     AppLog.w(TAG, "downloadFile: 403 on attempt $attempt, refreshing URL for key=$key")
                     val refreshed = refreshClipUrl(ownerId, videoId, video.accessKey)
                     if (refreshed != null) {
-                        currentUrl = refreshed
+                        currentUrl = refreshed.first
+                        currentKind = refreshed.second
                         // Не считаем эту попытку потраченной — URL обновлён, retry.
                         attempt--
                         delay(500L)
@@ -464,18 +531,18 @@ object ClipVideoDownloadManager {
      * часто приватные/ограниченные и требуют accessKey для повторного запроса
      * (см. RESEARCH-1 §1720 — Blocker).
      *
-     * Возвращает свежий `bestPlayUrl` или null (если clip удалён/недоступен
-     * на стороне VK).
+     * DL-C: возвращает (url, kind) через [pickClipSource] или null (если clip
+     * удалён/недоступен на стороне VK).
      */
-    private suspend fun refreshClipUrl(ownerId: Long, videoId: Long, accessKey: String?): String? {
+    private suspend fun refreshClipUrl(ownerId: Long, videoId: Long, accessKey: String?): Pair<String, String>? {
         return try {
             val app = SovaApp.get()
             val video = app.apiClient.videoGetClipById(ownerId, videoId, accessKey)
             if (video != null) {
-                val url = video.bestPlayUrl
-                AppLog.i(TAG, "refreshClipUrl: got fresh URL for clip $ownerId/$videoId: $url " +
+                val src = pickClipSource(video.files)
+                AppLog.i(TAG, "refreshClipUrl: got fresh source for clip $ownerId/$videoId: $src " +
                     "(files=${video.files?.size ?: 0}, accessKey=${if (video.accessKey != null) "yes" else "no"})")
-                url
+                src
             } else {
                 AppLog.w(TAG, "refreshClipUrl: clip $ownerId/$videoId not found via videoGetClipById (deleted on VK?)")
                 null
@@ -495,7 +562,9 @@ object ClipVideoDownloadManager {
         title: String,
     ) {
         val existingBytes = if (tempFile.exists()) tempFile.length() else 0L
-        val requestBuilder = Request.Builder().url(url)
+        // DL-C: VK CDN без `bytes=` отдаёт HTML-заглушку — оборачиваем URL
+        // (порт VK-Video-Downloader-4.js withBytes, эталон L185-188).
+        val requestBuilder = Request.Builder().url(HlsDownloadSupport.withBytes(url))
         if (existingBytes > 0) {
             requestBuilder.header("Range", "bytes=$existingBytes-")
             AppLog.i(TAG, "downloadWithResume: resuming from $existingBytes bytes (key=$key)")
@@ -548,10 +617,256 @@ object ClipVideoDownloadManager {
         }
     }
 
+    // ─── DL-C (Wave 2): HLS download (.m3u8 → .mp4/.ts) ─────────────────────
+
+    /** Файл кэша по ключу: ".mp4" (прогрессивные) или ".ts" (HLS→MPEG-TS). */
+    private fun localCacheFile(key: String): File? {
+        for (ext in listOf("mp4", "ts")) {
+            val f = File(downloadDir, "$key.$ext")
+            if (f.exists()) return f
+        }
+        return null
+    }
+
+    /** DL-C: temp → "$key.$ext"; stale-файл другого контейнера удаляется. */
+    private fun finalizeTempFile(tempFile: File, key: String, ext: String) {
+        val target = File(downloadDir, "$key.$ext")
+        if (!tempFile.renameTo(target)) {
+            tempFile.copyTo(target, overwrite = true)
+            tempFile.delete()
+        }
+        File(downloadDir, "$key.${if (ext == "ts") "mp4" else "ts"}").delete()
+    }
+
+    /** DL-C: первые [n] байт файла (container-detect / hasAudioAtom); null если файл короче. */
+    private fun readHeadBytes(file: File, n: Int): ByteArray? {
+        return try {
+            if (file.length() < n) return null
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                val buf = ByteArray(n)
+                raf.readFully(buf)
+                buf
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "readHeadBytes(${file.name}) failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * DL-C: скачать HLS в [tempFile]. Порт техник VK-Video-Downloader-4.js
+     * (эталон L875-892 — single-file fMP4 одним Range-запросом).
+     *
+     *  1. GET манифеста → [HlsDownloadSupport.parseM3U8].
+     *  2. Мастер-плейлист (variants) → [HlsDownloadSupport.pickBestVariant] →
+     *     variant-плейлист (до 3 уровней вложенности).
+     *  3. Media-плейлист:
+     *     - isSingleFile (fMP4 одним файлом, EXT-X-BYTERANGE) → ОДИН Range-запрос
+     *       `bytes=initOff..lastEnd` → валидный .mp4 (hasAudioAtom — информационно);
+     *     - иначе — последовательная закачка сегментов (EXT-X-MAP init первым)
+     *       в temp, 3 retry/сегмент; прогресс = done/totalSegs.
+     *  4. Container-detect по первым 8 байтам.
+     *
+     * @return контейнер из [HlsDownloadSupport.detectContainer]:
+     *         "mp4" | "ts" | "unknown" (caller трактовывает unknown как "mp4").
+     */
+    private suspend fun downloadHls(
+        playlistUrl: String,
+        tempFile: File,
+        key: String,
+        trackId: Long,
+        ownerId: Long,
+        title: String,
+    ): String {
+        // 1-2. Мастер → variant (защита от бесконечной вложенности).
+        var mediaUrl = playlistUrl
+        var playlist: HlsDownloadSupport.HlsPlaylist? = null
+        var hops = 0
+        while (hops < 3) {
+            val text = fetchPlaylistText(mediaUrl)
+            val parsed = HlsDownloadSupport.parseM3U8(text, mediaUrl)
+                ?: throw RuntimeException("Empty HLS playlist: $mediaUrl")
+            if (parsed.variants.isNotEmpty()) {
+                val best = HlsDownloadSupport.pickBestVariant(parsed)
+                    ?: throw RuntimeException("HLS master playlist без вариантов: $mediaUrl")
+                AppLog.i(TAG, "downloadHls: master → variant ${best.width}x${best.height} @${best.bandwidth}bps")
+                mediaUrl = best.url
+                hops++
+                continue
+            }
+            playlist = parsed
+            break
+        }
+        val pl = playlist
+            ?: throw RuntimeException("HLS: слишком глубокая вложенность плейлистов: $playlistUrl")
+        if (pl.segments.isEmpty()) throw RuntimeException("HLS плейлист без сегментов: $mediaUrl")
+
+        // HLS не резюмится по байтам — сегменты ретраятся сами; начинаем с чистого temp.
+        if (tempFile.exists()) tempFile.delete()
+
+        if (pl.isSingleFile) {
+            downloadHlsSingleFile(pl, tempFile, key, trackId, ownerId, title)
+        } else {
+            downloadHlsSegments(pl, tempFile, key, trackId, ownerId, title)
+        }
+
+        // 4. Container-detect по первым 8 байтам → корректное расширение (.ts если TS).
+        val container = readHeadBytes(tempFile, 8)?.let(HlsDownloadSupport::detectContainer) ?: "unknown"
+        AppLog.i(TAG, "downloadHls: key=$key done (${tempFile.length() / 1024} KB, container=$container)")
+        return container
+    }
+
+    /** DL-C: GET текста манифеста (без withBytes — плейлист, не медиа). */
+    private fun fetchPlaylistText(url: String): String {
+        val request = Request.Builder().url(url).build()
+        httpClient.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}: ${resp.message}")
+            return resp.body?.string() ?: throw RuntimeException("Empty response body (playlist)")
+        }
+    }
+
+    /**
+     * DL-C: single-file fMP4 — все сегменты это BYTERANGE-куски ОДНОГО URL,
+     * есть EXT-X-MAP. Порт VK-Video-Downloader-4.js:L875-892: ОДИН Range-запрос
+     * `bytes=initOff..lastEnd` вместо покусегментной закачки → сразу валидный .mp4.
+     */
+    private fun downloadHlsSingleFile(
+        pl: HlsDownloadSupport.HlsPlaylist,
+        tempFile: File,
+        key: String,
+        trackId: Long,
+        ownerId: Long,
+        title: String,
+    ) {
+        val init = requireNotNull(pl.initSegment) { "single-file fMP4 без EXT-X-MAP" }
+        val last = pl.segments.last()
+        val lastEndExclusive = last.offset + last.length
+        val rangeable = pl.segments.all { it.length > 0 } && lastEndExclusive > init.offset
+
+        val builder: Request.Builder
+        var totalBytes = -1L
+        if (rangeable) {
+            val rangeEndInclusive = lastEndExclusive - 1
+            totalBytes = lastEndExclusive - init.offset
+            builder = Request.Builder()
+                .url(HlsDownloadSupport.withBytes(pl.segments.first().url))
+                .header("Range", "bytes=${init.offset}-$rangeEndInclusive")
+            AppLog.i(TAG, "downloadHlsSingleFile: key=$key один Range-запрос bytes=${init.offset}-$rangeEndInclusive ($totalBytes B, ${pl.segments.size} byteranges)")
+        } else {
+            // BYTERANGE не распарсились — качаем файл целиком (init + все данные в нём же).
+            builder = Request.Builder().url(HlsDownloadSupport.withBytes(pl.segments.first().url))
+            AppLog.i(TAG, "downloadHlsSingleFile: key=$key BYTERANGE недоступен — полный GET")
+        }
+
+        var bytesRead = 0L
+        httpClient.newCall(builder.build()).execute().use { resp ->
+            if (resp.code != 200 && resp.code != 206) throw RuntimeException("HTTP ${resp.code}: ${resp.message}")
+            val body = resp.body ?: throw RuntimeException("Empty response body")
+            if (totalBytes <= 0) totalBytes = body.contentLength()
+            body.byteStream().use { input ->
+                FileOutputStream(tempFile, false).use { output ->
+                    val buffer = ByteArray(65536)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        output.write(buffer, 0, read)
+                        bytesRead += read
+                        if (totalBytes > 0) {
+                            val progress = ((bytesRead.toFloat() / totalBytes.toFloat()) * 100f)
+                                .toInt().coerceIn(0, 100)
+                            updateState(key, DownloadState(
+                                trackId = trackId,
+                                status = DownloadStatus.DOWNLOADING,
+                                progress = progress,
+                                title = title,
+                                artist = title,
+                                ownerId = ownerId,
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+        // Информационно: есть ли аудио-трек в init (VK-эталон L887-888:
+        // «единый MP4 без звука — так отдаёт VK»). На результат не влияет.
+        readHeadBytes(tempFile, 4096)?.let { head ->
+            val hasAudio = HlsDownloadSupport.hasAudioAtom(head)
+            AppLog.i(TAG, "downloadHlsSingleFile: key=$key audio=${if (hasAudio) "yes" else "NO (единый fMP4 без звука — так отдаёт VK)"}")
+        }
+    }
+
+    /**
+     * DL-C: многосегментный HLS (TS или fMP4-сегменты) — последовательная
+     * закачка в temp (EXT-X-MAP init первым), 3 retry/сегмент. Прогресс —
+     * по сегментам: done/totalSegs. Сегмент буферизуется в памяти и пишется
+     * целиком — retry не оставляет обрывков в temp.
+     */
+    private suspend fun downloadHlsSegments(
+        pl: HlsDownloadSupport.HlsPlaylist,
+        tempFile: File,
+        key: String,
+        trackId: Long,
+        ownerId: Long,
+        title: String,
+    ) {
+        val segments = ArrayList<HlsDownloadSupport.Segment>(pl.segments.size + 1)
+        pl.initSegment?.let { segments.add(it) }
+        segments.addAll(pl.segments)
+        val totalSegs = segments.size
+        AppLog.i(TAG, "downloadHlsSegments: key=$key сегментов: $totalSegs")
+
+        FileOutputStream(tempFile, true).use { output ->
+            for ((idx, seg) in segments.withIndex()) {
+                currentCoroutineContext().ensureActive()
+                output.write(fetchSegmentWithRetry(seg, idx, totalSegs))
+                // Прогресс по сегментам: done/total.
+                val progress = (((idx + 1).toFloat() / totalSegs.toFloat()) * 100f).toInt().coerceIn(0, 100)
+                updateState(key, DownloadState(
+                    trackId = trackId,
+                    status = DownloadStatus.DOWNLOADING,
+                    progress = progress,
+                    title = title,
+                    artist = title,
+                    ownerId = ownerId,
+                ))
+            }
+        }
+    }
+
+    /** DL-C: один сегмент с 3 retry; байты возвращаются целиком (пишет caller). */
+    private suspend fun fetchSegmentWithRetry(
+        seg: HlsDownloadSupport.Segment,
+        idx: Int,
+        totalSegs: Int,
+    ): ByteArray {
+        var lastErr: Exception? = null
+        for (attempt in 1..3) {
+            try {
+                val builder = Request.Builder().url(HlsDownloadSupport.withBytes(seg.url))
+                if (seg.length > 0) {
+                    builder.header("Range", "bytes=${seg.offset}-${seg.offset + seg.length - 1}")
+                }
+                httpClient.newCall(builder.build()).execute().use { resp ->
+                    if (resp.code != 200 && resp.code != 206) throw RuntimeException("HTTP ${resp.code}: ${resp.message}")
+                    val body = resp.body ?: throw RuntimeException("Empty response body (segment ${idx + 1})")
+                    return body.bytes()
+                }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                lastErr = e
+                AppLog.w(TAG, "downloadHlsSegments: сегмент ${idx + 1}/$totalSegs, попытка $attempt/3 failed: ${e.message}")
+                if (attempt < 3) delay(500L * attempt)
+            }
+        }
+        throw RuntimeException("HLS сегмент ${idx + 1}/$totalSegs failed после 3 retries: ${lastErr?.message}", lastErr)
+    }
+
     private fun refreshFromDisk() {
         val map = mutableMapOf<String, DownloadState>()
         downloadDir.listFiles()?.forEach { file ->
-            if (file.extension == "mp4") {
+            // DL-C: .mp4 (прогрессивные) или .ts (HLS→MPEG-TS результат).
+            if (file.extension == "mp4" || file.extension == "ts") {
                 // Ключ имеет формат "c_${ownerId}_${videoId}".
                 val name = file.nameWithoutExtension
                 if (!name.startsWith("c_")) return@forEach
@@ -616,7 +931,7 @@ object ClipVideoDownloadManager {
                 authorAvatar = authorAvatar,
                 accessKey = video.accessKey,
                 downloadedAt = now,
-                fileSize = File(downloadDir, "$key.mp4").takeIf { it.exists() }?.length() ?: 0L,
+                fileSize = localCacheFile(key)?.length() ?: 0L,
             )
             val json = com.google.gson.Gson().toJson(meta)
             metaFile.writeText(json)
