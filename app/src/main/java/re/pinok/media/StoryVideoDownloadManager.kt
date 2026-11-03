@@ -192,23 +192,59 @@ object StoryVideoDownloadManager {
         silent: Boolean = false,
     ) {
         ensureInitialized()
-
         val storyVideo = story.video
         if (storyVideo == null) {
             AppLog.w(TAG, "enqueueDownload: story #${story.id} has no video")
             return
         }
-
-        // DL-C (Wave 2): kind-aware выбор источника — mp4 напрямую, hls через
-        // [downloadHls], dash → явный FAIL (см. ниже). Раньше .m3u8 из `hls`
-        // скачивался как файл — пользователь получал текст вместо видео.
-        val src = pickBestSource(storyVideo.files)
-        if (src == null) {
+        val fileKey = pickBestKey(storyVideo.files)
+        if (fileKey == null) {
             AppLog.w(TAG, "enqueueDownload: story #${story.id} has no downloadable URL (files=${storyVideo.files?.keys})")
             return
         }
-        val (url, kind) = src
+        enqueueDownload(story, fileKey, ownerName, ownerPhoto100, silent)
+    }
 
+    /**
+     * DL-QP: скачать story с явно выбранным качеством (fileKey из шторки выбора).
+     * Контракт зеркален [VideoDownloadManager.enqueueDownload].
+     *
+     * @param fileKey один из ключей Video.files: «mp4_720»/«mp4_480»/…/«mp4_144»,
+     *   «hls»/«hls_fmp4»/«hls_ondemand» (→ сборка через [downloadHls]),
+     *   «dash*» (→ явный FAILED с [DASH_FAIL_REASON]).
+     */
+    fun enqueueDownload(
+        story: Story,
+        fileKey: String,
+        ownerName: String,
+        ownerPhoto100: String? = null,
+        silent: Boolean = false,
+    ) {
+        ensureInitialized()
+        val storyVideo = story.video
+        if (storyVideo == null) {
+            AppLog.w(TAG, "enqueueDownload: story #${story.id} has no video")
+            return
+        }
+        // DL-C: kind-aware выбор источника — mp4 напрямую, hls через [downloadHls],
+        // dash → явный FAIL (см. ниже). Раньше .m3u8 из `hls` скачивался как файл.
+        val src = pickSourceByKey(storyVideo.files, fileKey)
+        if (src == null) {
+            AppLog.w(TAG, "enqueueDownload: story #${story.id} fileKey=$fileKey не найден в files (keys=${storyVideo.files?.keys})")
+            return
+        }
+        val (url, kind) = src
+        enqueueDownloadInternal(story, url, kind, ownerName, ownerPhoto100, silent)
+    }
+
+    private fun enqueueDownloadInternal(
+        story: Story,
+        url: String,
+        kind: String,
+        ownerName: String,
+        ownerPhoto100: String?,
+        silent: Boolean,
+    ) {
         val key = storyKey(story.ownerId, story.id)
         synchronized(this) {
             val existing = _downloads.value[key]
@@ -407,27 +443,39 @@ object StoryVideoDownloadManager {
     }
 
     /**
-     * DL-C (Wave 2): выбрать источник скачивания из files map — (url, kind).
-     * Приоритет: mp4_720 → mp4_480 → mp4_360 → mp4_240 → mp4_144 (kind="mp4") →
-     * hls / hls_fmp4 (kind="hls") → dash* (kind="dash").
-     * Story videos обычно не имеют 1080 (в отличие от catalog videos).
-     *
-     *  - "mp4"  — прогрессивный MP4: качается напрямую (Range-resume + `bytes=`
-     *             параметр [HlsDownloadSupport.withBytes]);
-     *  - "hls"  — манифест .m3u8: НЕЛЬЗЯ сохранять как файл — качается через
-     *             [downloadHls] (раньше пользователь получал текст вместо видео);
-     *  - "dash" — DASH-манифест: скачивание не поддерживается, [enqueueDownload]
-     *             ставит FAILED с [DASH_FAIL_REASON];
-     *  - null   — нет известного источника (caller: warn + skip, как раньше).
+     * Лучший fileKey по приоритету (mp4_720→…→mp4_144 → hls → dash) — для
+     * auto-pick в legacy [enqueueDownload] (auto-cache-on-play) и для
+     * [refreshStoryUrl]. Возвращает null если files пуст/нет источников.
      */
-    private fun pickBestSource(files: Map<String, String>?): Pair<String, String>? {
+    private fun pickBestKey(files: Map<String, String>?): String? {
         if (files == null) return null
         fun firstOf(vararg keys: String): String? =
             keys.firstNotNullOfOrNull { files[it]?.takeIf(String::isNotBlank) }
-        firstOf("mp4_720", "mp4_480", "mp4_360", "mp4_240", "mp4_144")?.let { return it to KIND_MP4 }
-        firstOf("hls", "hls_fmp4")?.let { return it to KIND_HLS }
-        firstOf("dash", "dash_ondemand", "dash_sep", "dash_webm", "dash_webm_av1")?.let { return it to KIND_DASH }
-        return null
+        return firstOf("mp4_720", "mp4_480", "mp4_360", "mp4_240", "mp4_144")
+            ?: firstOf("hls", "hls_fmp4", "hls_ondemand")
+            ?: firstOf("dash", "dash_ondemand", "dash_sep", "dash_webm", "dash_webm_av1")
+    }
+
+    /**
+     * Map fileKey → (url, kind). null если ключа нет/blank/неизвестный kind.
+     * kind: [KIND_MP4] (mp4_*), [KIND_HLS] (hls/hls_fmp4/hls_ondemand),
+     * [KIND_DASH] (dash*) — для FAILED-обработки в [enqueueDownloadInternal].
+     */
+    private fun pickSourceByKey(files: Map<String, String>?, fileKey: String): Pair<String, String>? {
+        if (files == null) return null
+        val url = files[fileKey]?.takeIf(String::isNotBlank) ?: return null
+        val kind = when {
+            fileKey.startsWith("mp4_") -> KIND_MP4
+            fileKey == "hls" || fileKey == "hls_fmp4" || fileKey == "hls_ondemand" -> KIND_HLS
+            fileKey.startsWith("dash") -> KIND_DASH
+            else -> return null
+        }
+        return url to kind
+    }
+
+    private fun pickBestSource(files: Map<String, String>?): Pair<String, String>? {
+        val key = pickBestKey(files) ?: return null
+        return pickSourceByKey(files, key)
     }
 
     // ─── Foreground Service ─────────────────────────────────────────

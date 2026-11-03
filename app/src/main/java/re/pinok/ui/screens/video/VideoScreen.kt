@@ -100,6 +100,8 @@ import re.pinok.ui.components.AddVideoToAlbumSearchDialog
 import re.pinok.ui.components.DeleteVideoConfirmDialog
 import re.pinok.ui.components.AlbumContextMenuDropdown
 import re.pinok.ui.components.VideoContextMenuDropdown
+// 3-C #VIDEO-CARD-QUALITY-SHEET: шторка выбора качества (общая с VideoPlayerScreen).
+import re.pinok.ui.screens.videoplayer.VideoDownloadSheet
 
 /**
  * Экран списка видео — нативный интерфейс VK Video mobile.
@@ -265,6 +267,12 @@ fun VideoScreen(
     }
 
     val downloads by VideoDownloadManager.downloads.collectAsState()
+
+    // 3-C #VIDEO-CARD-QUALITY-SHEET: hoisted screen-level state — карточка
+    // каталога/альбома не вызывает enqueueDownload напрямую, а открывает шторку
+    // выбора качества (как VideoPlayerScreen). qualityVideo = таргет шторки.
+    var showQualitySheet by remember { mutableStateOf(false) }
+    var qualityVideo by remember { mutableStateOf<Video?>(null) }
 
     LaunchedEffect(Unit) {
         scope.launch {
@@ -714,7 +722,8 @@ fun VideoScreen(
                                             if (ds != null && ds.status != DownloadStatus.FAILED) {
                                                 VideoDownloadManager.removeDownload(video.ownerId, video.id)
                                             } else {
-                                                VideoDownloadManager.enqueueDownload(video)
+                                                qualityVideo = video
+                                                showQualitySheet = true
                                             }
                                         },
                                         // VIDEO-SCREEN-CRUD: long-press → контекстное меню.
@@ -896,7 +905,8 @@ fun VideoScreen(
                                             if (ds != null && ds.status != DownloadStatus.FAILED) {
                                                 VideoDownloadManager.removeDownload(video.ownerId, video.id)
                                             } else {
-                                                VideoDownloadManager.enqueueDownload(video)
+                                                qualityVideo = video
+                                                showQualitySheet = true
                                             }
                                         },
                                     )
@@ -1325,6 +1335,19 @@ fun VideoScreen(
                 }
             },
         )
+    }
+
+    // 3-C #VIDEO-CARD-QUALITY-SHEET: bottom-sheet выбора качества для карточек
+    // каталога/альбомов (как в VideoPlayerScreen). onPick → quality-aware enqueue.
+    if (showQualitySheet) {
+        val qv = qualityVideo
+        if (qv != null) {
+            VideoDownloadSheet(
+                video = qv,
+                onDismiss = { showQualitySheet = false },
+                onPick = { VideoDownloadManager.enqueueDownload(qv, it) },
+            )
+        }
     }
 }
 

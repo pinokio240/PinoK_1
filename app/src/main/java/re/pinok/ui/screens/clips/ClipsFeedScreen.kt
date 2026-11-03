@@ -83,6 +83,7 @@ import re.pinok.data.model.Video
 import re.pinok.media.ClipPlayer
 import re.pinok.media.ClipVideoDownloadManager
 import re.pinok.media.VideoPlayerConfig
+import re.pinok.ui.screens.videoplayer.VideoDownloadSheet
 import re.pinok.util.AppLog
 import re.pinok.util.VkUserAgent
 
@@ -118,6 +119,12 @@ fun ClipsFeedScreen(
 ) {
     val state by vm.state.collectAsState()
     val context = LocalContext.current
+
+    // §37.12 #329: quality-picker sheet для скачивания клипа (как в VideoPlayerScreen
+    // для каталога): пользователь выбирает качество mp4/HLS, и только после этого
+    // запускается ClipVideoDownloadManager.enqueueDownload(video, fileKey, ...).
+    var showClipDownloadSheet by remember { mutableStateOf(false) }
+    var qualityClip by remember { mutableStateOf<Video?>(null) }
 
     // Первая загрузка при входе.
     LaunchedEffect(Unit) {
@@ -205,6 +212,10 @@ fun ClipsFeedScreen(
                     onMore = { onMoreActions(clip) },
                     onHashtagClick = onHashtagClick,
                     onFetchDetails = { vm.fetchClipDetails(clip) },
+                    onPickDownload = { v ->
+                        qualityClip = v
+                        showClipDownloadSheet = true
+                    },
                 )
             }
 
@@ -262,6 +273,39 @@ fun ClipsFeedScreen(
                 modifier = Modifier.size(28.dp),
             )
         }
+
+        // §37.12 #329: quality-picker sheet для скачивания клипа (как в
+        // VideoPlayerScreen для каталога). Открывается по тапу на кнопку
+        // "Скачать" в ClipPlayerItem; после выбора качества вызывает
+        // ClipVideoDownloadManager.enqueueDownload(video, fileKey, ...).
+        if (showClipDownloadSheet) {
+            val qc = qualityClip
+            if (qc != null) {
+                VideoDownloadSheet(
+                    video = qc,
+                    onDismiss = { showClipDownloadSheet = false },
+                    title = "Скачать клип",
+                    onPick = { fileKey ->
+                        val authorName = if (qc.ownerId > 0) {
+                            state.profiles[qc.ownerId]?.fullName
+                        } else {
+                            state.groups[-qc.ownerId]?.name
+                        }
+                        val authorAvatar = if (qc.ownerId > 0) {
+                            state.profiles[qc.ownerId]?.photo100
+                        } else {
+                            state.groups[-qc.ownerId]?.photo100
+                        }
+                        ClipVideoDownloadManager.enqueueDownload(
+                            video = qc,
+                            fileKey = fileKey,
+                            authorName = authorName,
+                            authorAvatar = authorAvatar,
+                        )
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -293,6 +337,7 @@ private fun ClipPlayerItem(
     onMore: () -> Unit,
     onHashtagClick: (String) -> Unit = {},
     onFetchDetails: () -> Unit = {},
+    onPickDownload: (Video) -> Unit = {},
 ) {
     val context = LocalContext.current
     // Fix #336: читаем preferredQuality СИНХРОННО из кэша SovaApp.prefsSnapshot
@@ -695,7 +740,7 @@ private fun ClipPlayerItem(
                             android.widget.Toast.LENGTH_SHORT,
                         ).show()
                     } else if (!isDownloading) {
-                        // Запускаем скачивание.
+                        // Проверяем, что видео готово к скачиванию.
                         if (clip.bestPlayUrl.isNullOrBlank()) {
                             android.widget.Toast.makeText(
                                 context, "Видео ещё загружается, подождите…",
@@ -703,25 +748,11 @@ private fun ClipPlayerItem(
                             ).show()
                             return@ActionButton
                         }
-                        val authorName = if (clip.ownerId > 0) {
-                            profiles[clip.ownerId]?.fullName
-                        } else {
-                            groups[-clip.ownerId]?.name
-                        }
-                        val authorAvatar = if (clip.ownerId > 0) {
-                            profiles[clip.ownerId]?.photo100
-                        } else {
-                            groups[-clip.ownerId]?.photo100
-                        }
-                        ClipVideoDownloadManager.enqueueDownload(
-                            video = clip,
-                            authorName = authorName,
-                            authorAvatar = authorAvatar,
-                        )
-                        android.widget.Toast.makeText(
-                            context, "Скачивание начато",
-                            android.widget.Toast.LENGTH_SHORT,
-                        ).show()
+                        // Открываем quality-picker sheet (как в VideoPlayerScreen для
+                        // каталога): пользователь выбирает качество mp4/HLS, и только
+                        // после этого запускается enqueueDownload(video, fileKey, ...).
+                        // Сам sheet показывает Toast "Загрузка начата" после выбора.
+                        onPickDownload(clip)
                     }
                 },
             )

@@ -2904,6 +2904,7 @@ fun VideoPlayerScreen(
             VideoDownloadSheet(
                 video = qv,
                 onDismiss = { showQualitySheet = false },
+                onPick = { VideoDownloadManager.enqueueDownload(qv, it) },
             )
         }
     }
@@ -4240,9 +4241,11 @@ private fun fmtBytes(bytes: Long): String? {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun VideoDownloadSheet(
+fun VideoDownloadSheet(
     video: Video,
     onDismiss: () -> Unit,
+    title: String = "Скачать видео",
+    onPick: (fileKey: String) -> Unit,
 ) {
     val context = LocalContext.current
     val app = SovaApp.get()
@@ -4294,7 +4297,7 @@ private fun VideoDownloadSheet(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "Скачать видео",
+                    text = title,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
@@ -4317,9 +4320,11 @@ private fun VideoDownloadSheet(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                // DL-B: НОВЫЙ контракт enqueueDownload(video, fileKey) —
-                                // качество выбирает юзер, а не топ по умолчанию.
-                                VideoDownloadManager.enqueueDownload(video, opt.fileKey)
+                                // DL-QP: качество выбирает юзер в шторке; сам
+                                // запуск закачки делегирован в onPick (catalog
+                                // video → VideoDownloadManager, story/clip → свои
+                                // менеджеры с перегрузкой fileKey).
+                                onPick(opt.fileKey)
                                 android.widget.Toast.makeText(
                                     context,
                                     "Загрузка начата",

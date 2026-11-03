@@ -105,11 +105,13 @@ import re.pinok.data.model.StickerItem
 import re.pinok.data.model.StickerPack
 import re.pinok.data.model.Story
 import re.pinok.data.model.StoryGroup
+import re.pinok.data.model.Video
 import re.pinok.SovaApp
 import re.pinok.util.AppLog
 import re.pinok.util.VkUserAgent
 import re.pinok.media.VideoPlayerConfig
 import re.pinok.media.StoryVideoDownloadManager
+import re.pinok.ui.screens.videoplayer.VideoDownloadSheet
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -188,6 +190,15 @@ fun StoryViewerScreen(
     var stickerPacks by remember { mutableStateOf<List<StickerPack>>(emptyList()) }
     var stickerLoading by remember { mutableStateOf(false) }
     var selectedStickerPack by remember { mutableIntStateOf(0) }
+
+    // DL-QP-STORY: шторка выбора качества скачивания истории (VideoDownloadSheet,
+    // переиспользуется из VideoPlayerScreen — рендерит mp4_* descending + один HLS).
+    // Открывается ТОЛЬКО ручным тапом по кнопке/тап-зоне «скачать» (НЕ auto-cache-on-play:
+    // тот путь остаётся на старом 4-арг auto-pick перегрузе с silent=true).
+    // qualityStory хранит Story, для которого открыт picker — compose перерисует
+    // шторку при смене. Сбрасывается в onDismiss.
+    var qualityStory by remember { mutableStateOf<Story?>(null) }
+    var showStoryDownloadSheet by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
     var timerJob by remember { mutableStateOf<Job?>(null) }
@@ -750,7 +761,8 @@ fun StoryViewerScreen(
                         }
                         // Кнопка скачивания видео (StoryDownloadButton, BottomEnd).
                         // Отражаем старую логику onClick: в очереди/скачано → удалить,
-                        // иначе → поставить в очередь загрузки.
+                        // иначе → открыть шторку выбора качества (DL-QP-STORY),
+                        // и уже из неё — enqueueDownload с выбранным fileKey.
                         val db = downloadBounds
                         if (isVideoStory && db != null && db.contains(offset)) {
                             val dk0 = StoryVideoDownloadManager.storyKey(currentStory.ownerId, currentStory.id)
@@ -758,12 +770,8 @@ fun StoryViewerScreen(
                             if (ds0 != null && ds0.status != DownloadStatus.FAILED) {
                                 StoryVideoDownloadManager.removeDownload(currentStory.ownerId, currentStory.id)
                             } else {
-                                StoryVideoDownloadManager.enqueueDownload(
-                                    story = currentStory,
-                                    ownerName = currentGroup.name ?: "",
-                                    ownerPhoto100 = currentGroup.photo100,
-                                    silent = false,
-                                )
+                                qualityStory = currentStory
+                                showStoryDownloadSheet = true
                             }
                             return@detectTapGestures
                         }
@@ -1014,13 +1022,10 @@ fun StoryViewerScreen(
                         // Уже в очереди / скачивается / скачано → отменить/удалить.
                         StoryVideoDownloadManager.removeDownload(currentStory.ownerId, currentStory.id)
                     } else {
-                        // Не скачано или FAILED → поставить в очередь (foreground notif).
-                        StoryVideoDownloadManager.enqueueDownload(
-                            story = currentStory,
-                            ownerName = currentGroup.name ?: "",
-                            ownerPhoto100 = currentGroup.photo100,
-                            silent = false,
-                        )
+                        // Не скачано или FAILED → открыть шторку выбора качества
+                        // (DL-QP-STORY), и уже из неё — enqueueDownload с fileKey.
+                        qualityStory = currentStory
+                        showStoryDownloadSheet = true
                     }
                 },
                 modifier = Modifier
@@ -1138,6 +1143,47 @@ fun StoryViewerScreen(
                 },
                 onDismiss = { showStickerPicker = false },
             )
+        }
+
+        // DL-QP-STORY: шторка выбора качества скачивания истории (VideoDownloadSheet
+        // из VideoPlayerScreen — переиспользуем UI-лист: mp4_* по убыванию + одна
+        // HLS-строка, probe размеров, «рекоменд.» pill на верхнем mp4, тост
+        // «Загрузка начата» и onDismiss() после onPick). Шторка открывается только
+        // ручным тапом по кнопке/тап-зоне «скачать» — auto-cache-on-play (silent=true)
+        // здесь НЕ участвует, он идёт через старый 4-арг auto-pick перегруз.
+        //
+        // Тип Story.video — вложенный StoryVideo (VideoDownloadSheet ждёт top-level
+        // Video): строим минимальный Video, прокидывая files (единственное поле, что
+        // шторка читает — см. VideoPlayerScreen:4254 remember(video.files)). Прочие
+        // обязательные параметры ctor Video заполняем из story (id/ownerId) и
+        // StoryVideo (duration) — они НЕ влияют на UI шторки.
+        if (showStoryDownloadSheet) {
+            val qs = qualityStory
+            if (qs != null && qs.video != null) {
+                val sv = qs.video!!
+                val sheetVideo = Video(
+                    id = qs.id.toLong(),
+                    ownerId = qs.ownerId,
+                    title = "",
+                    duration = sv.duration,
+                    date = 0L,
+                    files = sv.files,
+                )
+                VideoDownloadSheet(
+                    video = sheetVideo,
+                    onDismiss = { showStoryDownloadSheet = false },
+                    title = "Скачать историю",
+                    onPick = { fileKey ->
+                        StoryVideoDownloadManager.enqueueDownload(
+                            story = qs,
+                            fileKey = fileKey,
+                            ownerName = currentGroup.name ?: "",
+                            ownerPhoto100 = currentGroup.photo100,
+                            silent = false,
+                        )
+                    },
+                )
+            }
         }
     }
 }
