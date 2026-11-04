@@ -1299,6 +1299,15 @@ private fun NotificationCard(
         //  • 1 профиль-пользователь → аватар пользователя 48dp + малый бейдж типа (20dp) в углу
         //  • несколько профилей или нет профилей → обычная иконка типа 48dp (старое поведение),
         //    аватары пользователей рендерятся как stacked-row внизу карточки
+        // VK-WEB-CARD: кликабельные ссылки в карточке:
+        //  1. Аватар → профиль отправителя (как в VK web — data-testid="notification-avatar")
+        //  2. Имя автора (header) → профиль отправителя
+        //  3. Текст/вложения → к комментарию/посту/вложению (navigate)
+        val clickProfile: () -> Unit = {
+            if (onUserClick != null && item.feedbackIds.isNotEmpty()) {
+                onUserClick(item.feedbackIds.first())
+            }
+        }
         val avatarUrl: String? = if (singleProfile != null) {
             val p200 = singleProfile.photo200
             val p100 = singleProfile.photo100
@@ -1315,7 +1324,8 @@ private fun NotificationCard(
                 .padding(top = 2.dp)
                 .size(48.dp)
                 .clip(CircleShape)
-                .background(if (avatarUrl != null) MaterialTheme.colorScheme.surfaceVariant else typeIcon.bgTint),
+                .background(if (avatarUrl != null) MaterialTheme.colorScheme.surfaceVariant else typeIcon.bgTint)
+                .clickable(onClick = clickProfile),
             contentAlignment = Alignment.Center,
         ) {
             if (avatarUrl != null && singleProfile != null) {
@@ -1463,11 +1473,6 @@ private fun NotificationCard(
             // Клик по имени → профиль отправителя (как в VK web).
             // Клик по остальной карточке → к комментарию/посту (navigate).
             if (header.isNotBlank()) {
-                val clickProfile: () -> Unit = {
-                    if (onUserClick != null && item.feedbackIds.isNotEmpty()) {
-                        onUserClick(item.feedbackIds.first())
-                    }
-                }
                 Text(
                     text = header,
                     style = MaterialTheme.typography.bodyMedium,
