@@ -1259,11 +1259,17 @@ private fun NotificationCard(
         } catch (e: Exception) {
             re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenNotifications
         }
+        // DIAG: логируем что построил deepLinker — для отладки переходов.
+        AppLog.i("NotifNav", "type=${item.type} parentType=${item.parentType} " +
+            "owner=${item.parentOwnerId} item=${item.parentItemId} " +
+            "comment=${item.parentCommentId} url=${item.parentUrl} " +
+            "→ action=$action")
         val handledByDeepLink =
             action !is re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenNotifications
         if (handledByDeepLink && onDeepLink != null) {
             onDeepLink(action)
         } else if (onUserClick != null && item.feedbackIds.isNotEmpty()) {
+            AppLog.w("NotifNav", "fallback to onUserClick (deepLink gave OpenNotifications)")
             onUserClick(item.feedbackIds.first())
         } else if (onPostClick != null && item.parentOwnerId != 0L && item.parentItemId != 0L) {
             onPostClick(item.parentOwnerId, item.parentItemId)
