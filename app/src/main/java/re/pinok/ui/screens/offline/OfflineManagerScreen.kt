@@ -1,7 +1,13 @@
 package re.pinok.ui.screens.offline
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +42,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PhotoCamera
@@ -77,6 +84,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import re.pinok.data.model.DownloadStatus
 import re.pinok.data.model.Track
 import re.pinok.media.ClipVideoDownloadManager
@@ -86,7 +94,6 @@ import re.pinok.media.VideoDownloadManager
 import re.pinok.media.StoryVideoDownloadManager
 import re.pinok.util.AppLog
 import java.io.File
-import android.widget.Toast
 
 private const val TAG = "OfflineManagerScreen"
 
@@ -1134,6 +1141,7 @@ private fun AudioOfflineTab(
                         state = downloadState,
                         // #ANR-MAIN-IO: размер из скана — без file.length() на recompose.
                         fileSize = item.sizeBytes,
+                        file = item.file,
                         onClick = {
                             val index = playableTracks.indexOfFirst { it.id == downloadState.trackId }
                             if (index >= 0) {
@@ -1229,6 +1237,7 @@ private fun VideoOfflineTab(
                         state = downloadState,
                         // #ANR-MAIN-IO: размер из скана — без file.length() на recompose.
                         fileSize = item.sizeBytes,
+                        file = item.file,
                         canPlay = onPlayVideo != null,
                         onClick = {
                             if (onPlayVideo != null) {
@@ -1251,17 +1260,24 @@ private fun VideoOfflineTab(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AudioOfflineRow(
     state: re.pinok.data.model.DownloadState,
     fileSize: Long,
+    file: File?,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val context = LocalContext.current
+    var showLocationMenu by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { showLocationMenu = true },
+            )
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1305,21 +1321,57 @@ private fun AudioOfflineRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // DL-LOCATION: long-press → «Расположение» — открывает папку с файлом.
+        DropdownMenu(
+            expanded = showLocationMenu,
+            onDismissRequest = { showLocationMenu = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Расположение") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.FolderOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                },
+                onClick = {
+                    showLocationMenu = false
+                    openFileLocation(context, file)
+                },
+            )
+        }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VideoOfflineRow(
     state: re.pinok.data.model.DownloadState,
     fileSize: Long,
+    file: File?,
     canPlay: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val context = LocalContext.current
+    var showLocationMenu by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (canPlay) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(
+                if (canPlay) {
+                    Modifier.combinedClickable(
+                        onClick = onClick,
+                        onLongClick = { showLocationMenu = true },
+                    )
+                } else {
+                    Modifier.combinedClickable(
+                        onClick = { showLocationMenu = true },
+                        onLongClick = { showLocationMenu = true },
+                    )
+                }
+            )
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1361,6 +1413,26 @@ private fun VideoOfflineRow(
                 imageVector = Icons.Default.Delete,
                 contentDescription = "Удалить",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // DL-LOCATION: long-press → «Расположение» — открывает папку с файлом.
+        DropdownMenu(
+            expanded = showLocationMenu,
+            onDismissRequest = { showLocationMenu = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Расположение") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.FolderOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                },
+                onClick = {
+                    showLocationMenu = false
+                    openFileLocation(context, file)
+                },
             )
         }
     }
@@ -1476,6 +1548,7 @@ private fun StoryOfflineTab(
                         meta = rowMeta,
                         // #ANR-MAIN-IO: размер из скана — без file.length() на recompose.
                         fileSize = item.sizeBytes,
+                        file = item.file,
                         // Fix #111: canPlay — файл, подтверждённый сканом (getLocalFile
                         // возвращает файл только если он существует и валиден).
                         // Живая exists()-проверка на каждый recompose убрана (#ANR-MAIN-IO).
@@ -1509,21 +1582,36 @@ private data class StoryOfflineItem(
     val dateKey: Long,
 )
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun StoryOfflineRow(
     state: re.pinok.data.model.DownloadState,
     meta: StoryVideoDownloadManager.StoryVideoMeta?,
     fileSize: Long,
+    file: File?,
     /** Fix #111: можно ли воспроизвести (файл существует + onPlayStory задан). */
     canPlay: Boolean = false,
     onPlay: () -> Unit = {},
     onDelete: () -> Unit,
 ) {
+    val context = LocalContext.current
+    var showLocationMenu by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            // Fix #111: тап по строке открывает StoryOfflinePlayerScreen (как VideoOfflineRow).
-            .then(if (canPlay) Modifier.clickable(onClick = onPlay) else Modifier)
+            .then(
+                if (canPlay) {
+                    Modifier.combinedClickable(
+                        onClick = onPlay,
+                        onLongClick = { showLocationMenu = true },
+                    )
+                } else {
+                    Modifier.combinedClickable(
+                        onClick = { showLocationMenu = true },
+                        onLongClick = { showLocationMenu = true },
+                    )
+                }
+            )
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1610,6 +1698,26 @@ private fun StoryOfflineRow(
                 imageVector = Icons.Default.Delete,
                 contentDescription = "Удалить",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // DL-LOCATION: long-press → «Расположение» — открывает папку с файлом.
+        DropdownMenu(
+            expanded = showLocationMenu,
+            onDismissRequest = { showLocationMenu = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Расположение") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.FolderOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                },
+                onClick = {
+                    showLocationMenu = false
+                    openFileLocation(context, file)
+                },
             )
         }
     }
@@ -1761,6 +1869,7 @@ private fun ClipOfflineTab(
                         meta = item.meta,
                         // #ANR-MAIN-IO: размер из скана — без file.length() на recompose.
                         fileSize = item.sizeBytes,
+                        file = item.file,
                         // §37.12 #330: canPlay — файл, подтверждённый сканом (getLocalFile
                         // возвращает файл только если он существует и валиден).
                         canPlay = rowFile != null && onPlayClip != null,
@@ -1794,21 +1903,36 @@ private fun ClipOfflineTab(
  * Thumbnail — из `meta.thumbUrl` (AsyncImage). Поверх thumbnail — полупрозрачный
  * PlayArrow overlay если canPlay (как в StoryOfflineRow).
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ClipOfflineRow(
     state: re.pinok.data.model.DownloadState,
     meta: ClipVideoDownloadManager.ClipVideoMeta?,
     fileSize: Long,
+    file: File?,
     /** §37.12 #330: можно ли воспроизвести (файл существует + onPlayClip задан). */
     canPlay: Boolean = false,
     onPlay: () -> Unit = {},
     onDelete: () -> Unit,
 ) {
+    val context = LocalContext.current
+    var showLocationMenu by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            // §37.12 #330: тап по строке открывает ClipOfflinePlayerScreen.
-            .then(if (canPlay) Modifier.clickable(onClick = onPlay) else Modifier)
+            .then(
+                if (canPlay) {
+                    Modifier.combinedClickable(
+                        onClick = onPlay,
+                        onLongClick = { showLocationMenu = true },
+                    )
+                } else {
+                    Modifier.combinedClickable(
+                        onClick = { showLocationMenu = true },
+                        onLongClick = { showLocationMenu = true },
+                    )
+                }
+            )
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1942,6 +2066,26 @@ private fun ClipOfflineRow(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // DL-LOCATION: long-press → «Расположение» — открывает папку с файлом.
+        DropdownMenu(
+            expanded = showLocationMenu,
+            onDismissRequest = { showLocationMenu = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Расположение") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.FolderOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                },
+                onClick = {
+                    showLocationMenu = false
+                    openFileLocation(context, file)
+                },
+            )
+        }
     }
 }
 
@@ -1969,5 +2113,102 @@ private fun formatDownloadedAt(timestampMs: Long): String {
         diff < 3600 -> "${diff / 60} мин назад"
         diff < 86400 -> "${diff / 3600} ч назад"
         else -> "${diff / 86400} д назад"
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  DL-LOCATION: открытие папки со скачанным файлом в системном
+//  файловом менеджере. Вызывается из long-press меню всех 4 Row
+//  (AudioOfflineRow / VideoOfflineRow / StoryOfflineRow / ClipOfflineRow).
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Открывает системный файловый менеджер на папке, содержащей [file].
+ *
+ * Стратегия:
+ *  1. FileProvider.getUriForFile → content:// URI папки (file.parentFile).
+ *     FileProvider уже объявлен в AndroidManifest (authority: ${pkg}.fileprovider),
+ *     file_paths.xml расширен external-path (см. res/xml/file_paths.xml:6).
+ *     ACTION_VIEW + type "resource/folder" — стандартный mime-type для папок,
+ *     поддерживается большинством файловых менеджеров (Files, Solid Explorer,
+ *     MiXplorer, Cx Проводник).
+ *  2. Если resource/folder не поддерживается (ActivityNotFoundException) —
+ *     fallback: ACTION_VIEW с самим файлом + его mime-типом (откроется ассоциированное
+ *     приложение — видеоплеер/музыкальный плеер; не папка, но лучше чем ничего).
+ *  3. Если FileProvider не может предоставить URI (IllegalArgumentException —
+ *     файл вне покрытых путей, например SD-карта SAF tree URI) — Toast с путём.
+ *
+ * На Android 7+ (API 24+) file:// URI в Intent запрещён (FileUriExposedException),
+ * поэтому обязателен FileProvider. На Android 6 и ниже file:// тоже работает,
+ * но FileProvider работает везде — используем единый путь.
+ */
+private fun openFileLocation(context: Context, file: File?) {
+    if (file == null || !file.exists()) {
+        Toast.makeText(context, "Файл не найден", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val folder = file.parentFile
+    if (folder == null || !folder.exists()) {
+        Toast.makeText(context, "Папка не найдена:\n${file.absolutePath}", Toast.LENGTH_LONG).show()
+        return
+    }
+    val authority = "${context.packageName}.fileprovider"
+    // Попытка 1: открыть папку через FileProvider + ACTION_VIEW + resource/folder.
+    try {
+        val folderUri = FileProvider.getUriForFile(context, authority, folder)
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(folderUri, "resource/folder")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(viewIntent)
+        AppLog.i(TAG, "openFileLocation: opened folder ${folder.absolutePath} via FileProvider")
+        return
+    } catch (e: IllegalArgumentException) {
+        // FileProvider не покрывает этот путь (например, SD-карта через SAF tree URI).
+        AppLog.w(TAG, "openFileLocation: FileProvider cannot share ${folder.absolutePath}: ${e.message}")
+    } catch (e: ActivityNotFoundException) {
+        // resource/folder mime-type не поддерживается — пробуем fallback ниже.
+        AppLog.w(TAG, "openFileLocation: no handler for resource/folder, trying file fallback")
+    }
+    // Попытка 2: открыть сам файл через FileProvider (пользователь увидит файл
+    // в ассоциированном приложении — не папку, но хотя бы покажет содержимое).
+    try {
+        val fileUri = FileProvider.getUriForFile(context, authority, file)
+        val mime = guessMimeType(file)
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(fileUri, mime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(viewIntent)
+        AppLog.i(TAG, "openFileLocation: opened file ${file.name} (mime=$mime) via FileProvider")
+        return
+    } catch (e: IllegalArgumentException) {
+        AppLog.w(TAG, "openFileLocation: file fallback also failed: ${e.message}")
+    } catch (e: ActivityNotFoundException) {
+        AppLog.w(TAG, "openFileLocation: no handler for mime, falling to Toast")
+    }
+    // Попытка 3: показываем путь в Toast (last resort — юзер скопирует вручную).
+    Toast.makeText(
+        context,
+        "Путь к файлу:\n${file.absolutePath}",
+        Toast.LENGTH_LONG,
+    ).show()
+}
+
+/**
+ * Грубая оценка mime-типа по расширению файла. Используется только для fallback
+ * в [openFileLocation] (когда FileProvider есть, но resource/folder не сработал).
+ * ContentResolver.getMimeType не работает с File-объектами напрямую — поэтому
+ * расширение-свитч. Покрывает все форматы, которые сохраняют менеджеры PinoK.
+ */
+private fun guessMimeType(file: File): String {
+    val name = file.name.lowercase()
+    return when {
+        name.endsWith(".mp4") -> "video/mp4"
+        name.endsWith(".m4a") -> "audio/mp4"
+        name.endsWith(".mp3") -> "audio/mpeg"
+        name.endsWith(".ts") -> "video/mp2t"
+        name.endsWith(".aac") -> "audio/aac"
+        else -> "application/octet-stream"
     }
 }

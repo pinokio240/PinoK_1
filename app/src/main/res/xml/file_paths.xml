@@ -4,4 +4,7 @@
     <files-path name="files" path="." />
     <external-files-path name="external_files" path="." />
     <external-cache-path name="external_cache" path="." />
+    <!-- DL-LOCATION: external storage root (Movies/PinoK/, Music/PinoK/) для
+         FileProvider ACTION_VIEW на папке скачанного файла. -->
+    <external-path name="external" path="." />
 </paths>
