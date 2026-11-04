@@ -9929,47 +9929,51 @@ class VKApiClient(
         }
     }
 
-    /** #75: notifications.markAsViewed — отметить уведомление просмотренным. */
+    /** VK-WEB-CARD: notifications.markAsViewed — отметить уведомление просмотренным.
+     *  VK web передаёт view_time (unix ts) — без него last_viewed может не обновляться. */
     suspend fun notificationsMarkAsViewed(groupId: Long? = null): Boolean {
         if (isOffline()) return false
         val args = mutableMapOf<String, String>()
+        // VK-WEB-CARD: view_time — обязателен по VK web протоколу (seconds).
+        // Без него сервер может не зафиксировать просмотр корректно.
+        args["view_time"] = (System.currentTimeMillis() / 1000).toString()
         if (groupId != null) args["group_id"] = groupId.toString()
         val json = call("notifications.markAsViewed", args) ?: return false
         return json.has("response")
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // #NOTIF-NFDCAT: действия «⋮» (dots_menu) — hide / unsubscribe.
+    // VK-WEB-CARD: действия «⋮» (dots_menu) — РЕАЛЬНЫЕ web-методы.
+    // Подтверждено анализом vk.ru/notifier.7e1ca24b.js:
+    //   hide_notification → notifications.hide(query=...)
+    //   unsubscribe       → notifications.unsubscribe(query=...)
+    //   undo hide         → notifications.restore(query=...)
+    //   undo unsubscribe  → notifications.subscribe(query=...)
+    //   api_call          → notifications.actionRedesign(query=...)
+    //   ungroup           → notifications.ungroupRedesign(query=...)
     //
-    // Точный web-endpoint VK для hide_notification/unsubscribe в архиве НЕ
-    // зафиксирован (метод web-бандла не снят). Реализуем best-effort через
-    // стандартный FAQ-метод notifications.hideNotification (#NOTIF-HELPERS:
-    // VK официально документирует notifications.hideNotification с аргументами
-    // item_id / owner_id / rating). Точные параметры из dots_menu.query могут
-    // отличаться — шлём query как есть (если непустой), иначе пустой вызов.
-    // УБЕДИТЕЛЬНАЯ оговорка: серверный эффект этих вызовов НЕ гарантирован
-    // для web-токенов; на экране под каждым пунктом выполняется ЛОКАЛЬНЫЙ
-    // dismiss с undo (UX-приоритет), а метод лишь пробует уведомить сервер.
-    //
-    // TODO #NOTIF-NFDCAT: подтвердить реальный endpoint (hide/unsubscribe)
-    // через анализ web-bundle уведомлений и заменить вызов на фактический.
+    // `query` — opaque курсор из dots_menu[].query (бинарный base64-подобный
+    // токен, НЕ owner_id/item_id). Передаётся как есть.
     // ══════════════════════════════════════════════════════════════════════
 
-    /** #NOTIF-NFDCAT: best-effort «Убрать из списка» (hide_notification). */
+    /** VK-WEB-CARD: «Убрать из списка» — notifications.hide(query=...). */
     suspend fun notificationsHideItem(name: String?, query: String?): Boolean {
         if (isOffline()) return false
-        val args = mutableMapOf<String, String>()
-        // Если у dots_menu пункта есть query — передаём его параметры как есть.
-        if (!query.isNullOrBlank()) args["query"] = query
-        if (!name.isNullOrBlank()) args["name"] = name
+        if (query.isNullOrBlank()) {
+            AppLog.w("VKApiClient", "notificationsHideItem: empty query — cannot call hide")
+            return false
+        }
+        val args = mapOf("query" to query)
         return try {
-            val json = call("notifications.hideNotification", args)
+            val json = call("notifications.hide", args)
             if (json == null) {
-                AppLog.w("VKApiClient", "notificationsHideItem: hideNotification returned null (name=$name query=$query)")
+                AppLog.w("VKApiClient", "notificationsHideItem: hide returned null (query=$query)")
                 false
             } else {
-                if (json.has("error")) AppLog.w("VKApiClient", "notificationsHideItem: API error=${json.getAsJsonObject("error").get("error_msg")?.asString}")
-                true
+                if (json.has("error")) {
+                    AppLog.w("VKApiClient", "notificationsHideItem: API error=${json.getAsJsonObject("error").get("error_msg")?.asString}")
+                    false
+                } else true
             }
         } catch (e: Exception) {
             AppLog.w("VKApiClient", "notificationsHideItem failed: ${e.message}")
@@ -9977,27 +9981,88 @@ class VKApiClient(
         }
     }
 
+    /** VK-WEB-CARD: server-rollback скрытия — notifications.restore(query=...).
+     *  Вызывается при undo из snackbar после hide. */
+    suspend fun notificationsRestore(query: String?): Boolean {
+        if (isOffline()) return false
+        if (query.isNullOrBlank()) {
+            AppLog.w("VKApiClient", "notificationsRestore: empty query")
+            return false
+        }
+        val args = mapOf("query" to query)
+        return try {
+            val json = call("notifications.restore", args)
+            if (json == null) {
+                AppLog.w("VKApiClient", "notificationsRestore: returned null (query=$query)")
+                false
+            } else !json.has("error")
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "notificationsRestore failed: ${e.message}")
+            false
+        }
+    }
+
     /**
-     * #NOTIF-NFDCAT: best-effort «Не уведомлять» (unsubscribe dots_menu-пункт).
-     * Отписка от категории уведомлений. web-endpoint не подтверждён; шлём
-     * notificationSettings.set? — не используем: VK API не документирует прямого
-     * метода отписки уведомлений по категории. Пробуем notifications.unsubscribe
-     * (не-документированный, best-effort). Локальный dismiss-эффект на экране
-     * гарантирован независимо от результата.
+     * VK-WEB-CARD: «Не уведомлять» — notifications.unsubscribe(query=...).
+     * Server-side отписка от категории уведомлений.
      */
     suspend fun notificationsUnsubscribe(name: String?, query: String?): Boolean {
         if (isOffline()) return false
-        val args = mutableMapOf<String, String>()
-        if (!query.isNullOrBlank()) args["query"] = query
-        if (!name.isNullOrBlank()) args["name"] = name
+        if (query.isNullOrBlank()) {
+            AppLog.w("VKApiClient", "notificationsUnsubscribe: empty query")
+            return false
+        }
+        val args = mapOf("query" to query)
         return try {
             val json = call("notifications.unsubscribe", args)
             if (json == null) {
-                AppLog.w("VKApiClient", "notificationsUnsubscribe: returned null (name=$name query=$query)")
+                AppLog.w("VKApiClient", "notificationsUnsubscribe: returned null (query=$query)")
                 false
-            } else true
+            } else !json.has("error")
         } catch (e: Exception) {
             AppLog.w("VKApiClient", "notificationsUnsubscribe failed: ${e.message}")
+            false
+        }
+    }
+
+    /** VK-WEB-CARD: server-rollback отписки — notifications.subscribe(query=...).
+     *  Вызывается при undo из snackbar после unsubscribe. */
+    suspend fun notificationsSubscribe(query: String?): Boolean {
+        if (isOffline()) return false
+        if (query.isNullOrBlank()) {
+            AppLog.w("VKApiClient", "notificationsSubscribe: empty query")
+            return false
+        }
+        val args = mapOf("query" to query)
+        return try {
+            val json = call("notifications.subscribe", args)
+            if (json == null) {
+                AppLog.w("VKApiClient", "notificationsSubscribe: returned null (query=$query)")
+                false
+            } else !json.has("error")
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "notificationsSubscribe failed: ${e.message}")
+            false
+        }
+    }
+
+    /** VK-WEB-CARD: dots_menu api_call — notifications.actionRedesign(query=...).
+     *  Произвольный server-side action по карточке (например «Открыть оригинал»). */
+    suspend fun notificationsActionRedesign(query: String?): Boolean {
+        if (isOffline()) return false
+        if (query.isNullOrBlank()) {
+            AppLog.w("VKApiClient", "notificationsActionRedesign: empty query")
+            return false
+        }
+        val args = mapOf("query" to query)
+        return try {
+            val json = call("notifications.actionRedesign", args)
+            if (json == null) {
+                AppLog.w("VKApiClient", "notificationsActionRedesign: returned null (query=$query)")
+                false
+            } else !json.has("error")
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "notificationsActionRedesign failed: ${e.message}")
             false
         }
     }

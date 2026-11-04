@@ -733,7 +733,7 @@ fun NotificationsScreen(
     fun hideNotificationWithUndo(item: VKApiClient.NotificationItem) {
         val key = item.uniqueKey
         hiddenKeys.add(key)
-        // best-effort серверный вызов (endpoint не подтверждён; результат не критичен).
+        // VK-WEB-CARD: server-side hide через notifications.hide(query=...).
         val hideAction = item.dotsMenu.firstOrNull { it.isHide }
         scope.launch {
             if (hideAction != null) {
@@ -746,6 +746,10 @@ fun NotificationsScreen(
             )
             if (result == SnackbarResult.ActionPerformed) {
                 hiddenKeys.remove(key)
+                // VK-WEB-CARD: server-side rollback через notifications.restore(query=...).
+                if (hideAction != null) {
+                    app.apiClient.notificationsRestore(hideAction.query)
+                }
             }
         }
     }
@@ -753,6 +757,7 @@ fun NotificationsScreen(
     fun unsubscribeWithUndo(item: VKApiClient.NotificationItem) {
         val key = item.uniqueKey
         hiddenKeys.add(key)
+        // VK-WEB-CARD: server-side unsubscribe через notifications.unsubscribe(query=...).
         val unsubAction = item.dotsMenu.firstOrNull { it.isUnsubscribe }
         scope.launch {
             if (unsubAction != null) {
@@ -765,6 +770,10 @@ fun NotificationsScreen(
             )
             if (result == SnackbarResult.ActionPerformed) {
                 hiddenKeys.remove(key)
+                // VK-WEB-CARD: server-side rollback через notifications.subscribe(query=...).
+                if (unsubAction != null) {
+                    app.apiClient.notificationsSubscribe(unsubAction.query)
+                }
             }
         }
     }
@@ -1066,6 +1075,8 @@ fun NotificationsScreen(
                                         photoViewerUrls = urls
                                         photoViewerIndex = idx
                                     },
+                                    // VK-WEB-CARD: per-card NEW-бейдж.
+                                    lastViewed = lastViewed,
                                 )
                                 HorizontalDivider(
                                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -1154,6 +1165,8 @@ private fun NotificationCardSwipeable(
     onOpenNotificationSettings: (() -> Unit)? = null,
     // FIX-C: тап по фото-вложению → PhotoViewer (полноэкранный просмотр).
     onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
+    // VK-WEB-CARD: last_viewed для per-card NEW-бейджа.
+    lastViewed: Long? = null,
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = {
@@ -1196,6 +1209,8 @@ private fun NotificationCardSwipeable(
             onOpenNotificationSettings = onOpenNotificationSettings,
             // FIX-C: фото-вложения открывают native PhotoViewer.
             onPhotoClick = onPhotoClick,
+            // VK-WEB-CARD: per-card NEW-бейдж.
+            lastViewed = lastViewed,
         )
     }
 }
@@ -1220,6 +1235,9 @@ private fun NotificationCard(
     onOpenNotificationSettings: (() -> Unit)? = null,
     // FIX-C: тап по фото-вложению → PhotoViewer (полноэкранный просмотр).
     onPhotoClick: (List<String>, Int) -> Unit = { _, _ -> },
+    // VK-WEB-CARD: last_viewed из getRedesign ответа — для per-card NEW-бейджа.
+    // Если item.date >= lastViewed — карточка «новая» (синяя точка рядом со временем).
+    lastViewed: Long? = null,
 ) {
     val typeIcon = getTypeIcon(item.type)
     var showContextMenu by remember { mutableStateOf(false) }
@@ -1369,12 +1387,27 @@ private fun NotificationCard(
 
         // ─── Контент ───
         Column(modifier = Modifier.weight(1f)) {
-            // VK-WEB-CARD: строка заголовка — время + меню ⋮ (справа, как в VK web).
+            // VK-WEB-CARD: строка заголовка — время + NEW-бейдж + меню ⋮ (справа).
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.End,
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                // VK-WEB-CARD: per-card NEW-бейдж (data-testid="notification-viewed-badge"
+                // в VK web — синяя точка для непрочитанных). item.date >= lastViewed = новое.
+                val isNew = if (lastViewed != null && lastViewed > 0L) {
+                    item.date >= lastViewed
+                } else {
+                    false
+                }
+                if (isNew) {
+                    Box(
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .size(8.dp)
+                            .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    )
+                }
                 Text(
                     text = item.date.toRelativeTime(),
                     style = MaterialTheme.typography.labelSmall,
