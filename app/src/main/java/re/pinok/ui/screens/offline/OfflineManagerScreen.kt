@@ -2203,24 +2203,58 @@ private fun openFileLocation(context: Context, file: File?) {
             "com.android.externalstorage.documents",
             documentId,
         )
-        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-            // НЕ вызываем setDataAndType — иначе потребуется URI permission.
-            // EXTRA_INITIAL_URI — просто подсказка, DocumentsUI читает сам.
+        // DL-LOCATION-FIX3: ЯВНО указываем DocumentsUI — иначе ACTION_VIEW
+        // без data может открыть произвольное приложение (галерею/браузер/...)
+        // или упасть с ActivityNotFoundException. Перебираем известные package
+        // names системного Files на разных прошивках: AOSP, Google, MIUI,
+        // OneUI, Huawei. Первый найденный запускаем.
+        val documentsUiPackages = listOf(
+            "com.android.documentsui",         // AOSP / Google
+            "com.google.android.documentsui",  // Google Play Edition
+            "com.mi.android.globalFileexplorer", // MIUI
+            "com.android.filemanager",         // некоторые Samsung
+            "com.huawei.hidisk",               // Huawei EMUI
+        )
+        var opened = false
+        for (pkg in documentsUiPackages) {
+            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+                }
+                setPackage(pkg)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (viewIntent.resolveActivity(context.packageManager) != null) {
+                try {
+                    context.startActivity(viewIntent)
+                    AppLog.i(TAG, "openFileLocation: opened $pkg at $folderPath via EXTRA_INITIAL_URI")
+                    opened = true
+                    break
+                } catch (e: ActivityNotFoundException) {
+                    AppLog.w(TAG, "openFileLocation: $pkg not available")
+                } catch (e: SecurityException) {
+                    AppLog.w(TAG, "openFileLocation: SecurityException on $pkg: ${e.message}")
+                }
+            }
+        }
+        if (opened) {
+            return
+        }
+        // Fallback: ACTION_VIEW без package — пусть система выберет проводник.
+        val fallbackIntent = Intent(Intent.ACTION_VIEW).apply {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
             }
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         try {
-            context.startActivity(viewIntent)
-            AppLog.i(TAG, "openFileLocation: opened Files at $folderPath via EXTRA_INITIAL_URI")
+            context.startActivity(fallbackIntent)
+            AppLog.i(TAG, "openFileLocation: opened default viewer at $folderPath (fallback)")
             return
         } catch (e: ActivityNotFoundException) {
-            AppLog.w(TAG, "openFileLocation: no default Files app, trying chooser fallback")
+            AppLog.w(TAG, "openFileLocation: no Files app, trying chooser fallback")
         } catch (e: SecurityException) {
-            // Теоретически невозможно (intent без data не требует permission),
-            // но ловим для надёжности.
-            AppLog.w(TAG, "openFileLocation: SecurityException on ACTION_VIEW: ${e.message}")
+            AppLog.w(TAG, "openFileLocation: SecurityException on fallback: ${e.message}")
         }
     }
 
