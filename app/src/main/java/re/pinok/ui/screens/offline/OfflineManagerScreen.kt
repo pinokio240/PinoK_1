@@ -1339,16 +1339,8 @@ private fun AudioOfflineRow(
                 },
                 onClick = {
                     showLocationMenu = false
-                    openFileLocation(context, file)
+                    openFileLocation(context, file, TrackDownloadManager.getDownloadDir())
                 },
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun VideoOfflineRow(
     state: re.pinok.data.model.DownloadState,
     fileSize: Long,
     file: File?,
@@ -1433,7 +1425,7 @@ private fun VideoOfflineRow(
                 },
                 onClick = {
                     showLocationMenu = false
-                    openFileLocation(context, file)
+                    openFileLocation(context, file, VideoDownloadManager.getDownloadDir())
                 },
             )
         }
@@ -1720,7 +1712,7 @@ private fun StoryOfflineRow(
                 },
                 onClick = {
                     showLocationMenu = false
-                    openFileLocation(context, file)
+                    openFileLocation(context, file, StoryVideoDownloadManager.getDownloadDir())
                 },
             )
         }
@@ -2088,7 +2080,7 @@ private fun ClipOfflineRow(
                 },
                 onClick = {
                     showLocationMenu = false
-                    openFileLocation(context, file)
+                    openFileLocation(context, file, ClipVideoDownloadManager.getDownloadDir())
                 },
             )
         }
@@ -2159,14 +2151,26 @@ private fun formatDownloadedAt(timestampMs: Long): String {
  * На Android 7+ (API 24+) file:// URI в Intent запрещён (FileUriExposedException),
  * поэтому везде используем content:// через FileProvider или DocumentsContract.
  */
-private fun openFileLocation(context: Context, file: File?) {
-    if (file == null || !file.exists()) {
-        Toast.makeText(context, "Файл не найден", Toast.LENGTH_SHORT).show()
-        return
+private fun openFileLocation(context: Context, file: File?, fallbackFolder: File) {
+    // DL-LOCATION-FIX4: открываем ПАПКУ, не файл. Если конкретный файл не
+    // существует (скачивание не завершено или failed) — всё равно открываем
+    // настроенную папку (fallbackFolder из менеджера), чтобы пользователь
+    // увидел содержимое.
+    val folder: File = if (file != null && file.exists()) {
+        val parent = file.parentFile
+        if (parent != null && parent.exists()) parent else fallbackFolder
+    } else {
+        fallbackFolder
     }
-    val folder = file.parentFile
-    if (folder == null || !folder.exists()) {
-        Toast.makeText(context, "Папка не найдена:\n${file.absolutePath}", Toast.LENGTH_LONG).show()
+    if (!folder.exists()) {
+        // Папка не создана — mkdirs() не сработал (нет MANAGE_EXTERNAL_STORAGE
+        // на Android 11+). Показываем Toast с путём + подсказкой.
+        Toast.makeText(
+            context,
+            "Папка не создана:\n${folder.absolutePath}\n\n" +
+                "Выдайте «Доступ ко всем файлам» в Настройках → Путь сохранения.",
+            Toast.LENGTH_LONG,
+        ).show()
         return
     }
     val folderPath = folder.absolutePath

@@ -378,6 +378,12 @@ object StoryVideoDownloadManager {
         return localCacheFile(storyKey(ownerId, storyId))
     }
 
+    /** DL-LOCATION: текущая директория загрузок (для openFileLocation в UI). */
+    fun getDownloadDir(): File {
+        ensureInitialized()
+        return downloadDir
+    }
+
     /**
      * Fix #100: public accessor к .meta sidecar — нужен OfflineManagerScreen
      * для отображения ownerName, ownerPhoto100, thumbUrl, expiresAt, duration.

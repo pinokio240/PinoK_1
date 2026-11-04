@@ -402,6 +402,12 @@ object ClipVideoDownloadManager {
         return localCacheFile(clipKey(ownerId, videoId))
     }
 
+    /** DL-LOCATION: текущая директория загрузок (для openFileLocation в UI). */
+    fun getDownloadDir(): File {
+        ensureInitialized()
+        return downloadDir
+    }
+
     /**
      * §37.12 #329: public accessor к .meta sidecar — нужен OfflineManagerScreen
      * для отображения title/description/thumbUrl/duration/authorName/authorAvatar/accessKey.
