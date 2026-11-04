@@ -479,35 +479,55 @@ object StoryVideoDownloadManager {
      * Лучший fileKey по приоритету (mp4_720→…→mp4_144 → hls → dash) — для
      * auto-pick в legacy [enqueueDownload] (auto-cache-on-play) и для
      * [refreshStoryUrl]. Возвращает null если files пуст/нет источников.
+     *
+     * DL-EXPLICIT: явный if-каскад вместо elvis-цепочки `?:`. Перебор по
+     * приоритетам: первый найденный ключ возвращаем сразу.
      */
     private fun pickBestKey(files: Map<String, String>?): String? {
         if (files == null) return null
-        fun firstOf(vararg keys: String): String? =
-            keys.firstNotNullOfOrNull { files[it]?.takeIf(String::isNotBlank) }
-        return firstOf("mp4_720", "mp4_480", "mp4_360", "mp4_240", "mp4_144")
-            ?: firstOf("hls", "hls_fmp4", "hls_ondemand")
-            ?: firstOf("dash", "dash_ondemand", "dash_sep", "dash_webm", "dash_webm_av1")
+        // Локальная функция: первый непустой ключ из vararg.
+        fun firstOf(vararg keys: String): String? {
+            for (k in keys) {
+                val v = files[k]
+                if (v != null && v.isNotBlank()) return k
+            }
+            return null
+        }
+        // Приоритет 1: mp4 (прямые .mp4 URL — лучшее качество, без сборки).
+        val mp4 = firstOf("mp4_720", "mp4_480", "mp4_360", "mp4_240", "mp4_144")
+        if (mp4 != null) return mp4
+        // Приоритет 2: HLS (требует сборки m3u8 в один файл).
+        val hls = firstOf("hls", "hls_fmp4", "hls_ondemand")
+        if (hls != null) return hls
+        // Приоритет 3: DASH (приведёт к FAILED — DASH не качаем).
+        val dash = firstOf("dash", "dash_ondemand", "dash_sep", "dash_webm", "dash_webm_av1")
+        if (dash != null) return dash
+        return null
     }
 
     /**
      * Map fileKey → (url, kind). null если ключа нет/blank/неизвестный kind.
      * kind: [KIND_MP4] (mp4_*), [KIND_HLS] (hls/hls_fmp4/hls_ondemand),
      * [KIND_DASH] (dash*) — для FAILED-обработки в [enqueueDownloadInternal].
+     *
+     * DL-EXPLICIT: явная nullable-проверка вместо `?.takeIf(...) ?: return null`.
      */
     private fun pickSourceByKey(files: Map<String, String>?, fileKey: String): Pair<String, String>? {
         if (files == null) return null
-        val url = files[fileKey]?.takeIf(String::isNotBlank) ?: return null
+        val rawUrl = files[fileKey]
+        if (rawUrl == null || rawUrl.isBlank()) return null
         val kind = when {
             fileKey.startsWith("mp4_") -> KIND_MP4
             fileKey == "hls" || fileKey == "hls_fmp4" || fileKey == "hls_ondemand" -> KIND_HLS
             fileKey.startsWith("dash") -> KIND_DASH
             else -> return null
         }
-        return url to kind
+        return rawUrl to kind
     }
 
     private fun pickBestSource(files: Map<String, String>?): Pair<String, String>? {
-        val key = pickBestKey(files) ?: return null
+        val key = pickBestKey(files)
+        if (key == null) return null
         return pickSourceByKey(files, key)
     }
 

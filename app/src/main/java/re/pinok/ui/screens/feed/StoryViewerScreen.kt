@@ -1162,6 +1162,9 @@ fun StoryViewerScreen(
             if (qs != null) {
                 val sv = qs.video
                 if (sv != null) {
+                    // DL-EXPLICIT: hoist- вычисляем ownerName до вызова — без `?: ""`.
+                    val rawOwnerName = currentGroup.name
+                    val resolvedOwnerName = if (rawOwnerName != null) rawOwnerName else ""
                     val sheetVideo = Video(
                         id = qs.id.toLong(),
                         ownerId = qs.ownerId,
@@ -1178,7 +1181,7 @@ fun StoryViewerScreen(
                             StoryVideoDownloadManager.enqueueDownload(
                                 story = qs,
                                 fileKey = fileKey,
-                                ownerName = currentGroup.name ?: "",
+                                ownerName = resolvedOwnerName,
                                 ownerPhoto100 = currentGroup.photo100,
                                 silent = false,
                             )

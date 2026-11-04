@@ -4319,9 +4319,12 @@ fun VideoDownloadSheet(
                         VideoDownloadOption.Kind.HLS -> "сборка в один файл"
                         VideoDownloadOption.Kind.MP4 -> {
                             val size = sizeByKey[opt.fileKey]
-                            when {
-                                size != null && size > 0L -> fmtBytes(size) ?: "—"
-                                else -> "—"
+                            // DL-EXPLICIT: двойной явный if вместо каскада `?:`.
+                            if (size != null && size > 0L) {
+                                val formatted = fmtBytes(size)
+                                if (formatted != null) formatted else "—"
+                            } else {
+                                "—"
                             }
                         }
                     }

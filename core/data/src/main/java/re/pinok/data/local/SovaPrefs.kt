@@ -79,6 +79,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     private val ds = context.applicationContext.sovaDataStore
 
     val data: Flow<Snapshot> = ds.data.map { p ->
+        // DL-EXPLICIT: явное вычисление default-значений для новых полей
+        // (storyVideoDownloadPath / clipDownloadPath) — без `?:` в аргументах
+        // конструктора Snapshot. Прочие 100+ полей оставлены как есть (сложившийся
+        // паттерн DataStore-default-маппинга); при глобальном рефакторинге SovaPrefs
+        // применить тот же приём ко всем.
+        val rawStoryPath = p[Keys.STORY_VIDEO_DOWNLOAD_PATH]
+        val storyVideoDownloadPath = if (rawStoryPath != null) rawStoryPath else "/Movies/PinoK/Stories/"
+        val rawClipPath = p[Keys.CLIP_DOWNLOAD_PATH]
+        val clipDownloadPath = if (rawClipPath != null) rawClipPath else "/Movies/PinoK/Clips/"
         Snapshot(
             // News
             newsAdsBlocked     = p[Keys.NEWS_ADS_BLOCKED]     ?: true,
@@ -357,8 +366,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             videoDownloadPath  = p[Keys.VIDEO_DOWNLOAD_PATH]   ?: "/Movies/PinoK/",
             // DL-EXTERNAL-ONLY: stories и clips тоже пишем в external по умолчанию.
             // Подпапки в /Movies/PinoK/ чтобы не смешивались с полноразмерными видео.
-            storyVideoDownloadPath = p[Keys.STORY_VIDEO_DOWNLOAD_PATH] ?: "/Movies/PinoK/Stories/",
-            clipDownloadPath   = p[Keys.CLIP_DOWNLOAD_PATH]    ?: "/Movies/PinoK/Clips/",
+            // DL-EXPLICIT: значение вычислено выше (rawStoryPath / rawClipPath).
+            storyVideoDownloadPath = storyVideoDownloadPath,
+            clipDownloadPath   = clipDownloadPath,
             musicHighQuality   = p[Keys.MUSIC_HQ]              ?: true,
             musicHqOnMobile    = p[Keys.MUSIC_HQ_MOBILE]       ?: true,
             musicBackgroundPlay= p[Keys.MUSIC_BG_PLAY]         ?: true,
