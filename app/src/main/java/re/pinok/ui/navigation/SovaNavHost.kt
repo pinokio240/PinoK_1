@@ -572,7 +572,8 @@ fun SovaNavHost(
                     // ничего не открывал. Теперь открываем overlay-плеер через
                     // VideoHolder.open(Video(...)) — VideoPlatformRouter сам
                     // подтянет CDN URL и метаданные по owner_id+video_id.
-                    AppLog.i("SovaNavHost", "DEEP_LINK: opening VideoPlayer overlay owner=${link.ownerId} video=${link.videoId}")
+                    // VK-WEB-CARD: log commentId (reply=) для будущей реализации скролла к комментарию.
+                    AppLog.i("SovaNavHost", "DEEP_LINK: opening VideoPlayer overlay owner=${link.ownerId} video=${link.videoId} commentId=${link.commentId}")
                     VideoHolder.open(Video(
                         id = link.videoId,
                         ownerId = link.ownerId,

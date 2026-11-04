@@ -116,7 +116,7 @@ object VkUrlDeepLinker {
             val accessKey: String? = null,
         ) : DeepLinkAction()
 
-        data class OpenVideo(val ownerId: Long, val videoId: Long) : DeepLinkAction()
+        data class OpenVideo(val ownerId: Long, val videoId: Long, val commentId: Long = 0L) : DeepLinkAction()
         data class OpenUser(val userId: Long) : DeepLinkAction()
         data class OpenCommunity(val groupId: Long) : DeepLinkAction()
         object OpenNotifications : DeepLinkAction()
@@ -279,9 +279,12 @@ object VkUrlDeepLinker {
                         accessKey = firstPhotoAccessKey(item),
                     )
                     "video" -> DeepLinkAction.OpenVideo(parsed.ownerId, parsed.itemId)
-                    // VK-WEB-CARD: clip → OpenVideo (для клипов нет отдельного экрана).
-                    // commentId (reply=) — передаём в OpenVideo для возможного скролла.
-                    "clip" -> DeepLinkAction.OpenVideo(parsed.ownerId, parsed.itemId)
+                    // VK-WEB-CARD: clip → OpenVideo + commentId (reply=) для скролла к комментарию.
+                    "clip" -> DeepLinkAction.OpenVideo(
+                        ownerId = parsed.ownerId,
+                        videoId = parsed.itemId,
+                        commentId = parsed.commentId,
+                    )
                     "user" -> {
                         if (parsed.ownerId > 0) DeepLinkAction.OpenUser(parsed.ownerId)
                         else fallbackDeepLink(item)
