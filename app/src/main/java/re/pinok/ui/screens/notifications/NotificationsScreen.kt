@@ -1229,6 +1229,23 @@ private fun NotificationCard(
     val context = LocalContext.current
     val linkColor = MaterialTheme.colorScheme.primary
 
+    // VK-WEB-CARD: разделение на header (имя автора) и displayText (глагол без имени).
+    // VK web: data-testid="notification-header" = имя, data-testid="notification-text" = глагол.
+    // PinoK: item.text содержит полный текст с именем в начале («Имя оценил ваш комментарий»).
+    // Для single profile — отрезаем имя из начала text. Для multi/нет profile — text как есть.
+    val profiles = item.feedbackProfiles
+    val singleProfile = if (profiles.size == 1) profiles.first() else null
+    val header: String = if (singleProfile != null) {
+        singleProfile.name
+    } else {
+        ""
+    }
+    val displayText: String = if (header.isNotBlank() && item.text.startsWith(header)) {
+        item.text.removePrefix(header).trimStart()
+    } else {
+        item.text
+    }
+
     // #NOTIF-DEEPLINK (2026-10-02): клик по карточке → существующий движок
     // VkUrlDeepLinker.deepLinkFor(item) строит точный target (пост с commentId,
     // фото, видео, юзер, сообщество, уведомления). Раньше клик открывал пост
@@ -1267,16 +1284,12 @@ private fun NotificationCard(
             .padding(horizontal = UiScale.scaled(12.dp), vertical = UiScale.scaled(10.dp)),
         verticalAlignment = Alignment.Top,
     ) {
-        // ─── Аватар / Иконка типа (NOTIF-FIX-1, Task 2) ───
+        // ─── Аватар / Иконка типа (VK-WEB-CARD: 48dp как в VK web) ───
         // Логика как на VK web:
-        //  • 1 профиль-сообщество → аватар группы 40dp + малый бейдж типа (16dp) в углу
-        //  • 1 профиль-пользователь → аватар пользователя 40dp + малый бейдж типа (16dp) в углу
-        //  • несколько профилей или нет профилей → обычная иконка типа 40dp (старое поведение),
+        //  • 1 профиль-сообщество → аватар группы 48dp + малый бейдж типа (20dp) в углу
+        //  • 1 профиль-пользователь → аватар пользователя 48dp + малый бейдж типа (20dp) в углу
+        //  • несколько профилей или нет профилей → обычная иконка типа 48dp (старое поведение),
         //    аватары пользователей рендерятся как stacked-row внизу карточки
-        // NULLSAFE-1: заменили `item.feedbackProfiles.takeIf { it.size == 1 }?.first()` и
-        // `singleProfile?.let { ... }` на явные null-check'и + локальные val.
-        val profiles = item.feedbackProfiles
-        val singleProfile = if (profiles.size == 1) profiles.first() else null
         val avatarUrl: String? = if (singleProfile != null) {
             val p200 = singleProfile.photo200
             val p100 = singleProfile.photo100
@@ -1285,11 +1298,13 @@ private fun NotificationCard(
                 p100.isNotBlank() -> p100
                 else -> null
             }
-        } else null
+        } else {
+            null
+        }
         Box(
             modifier = Modifier
                 .padding(top = 2.dp)
-                .size(40.dp)
+                .size(48.dp)
                 .clip(CircleShape)
                 .background(if (avatarUrl != null) MaterialTheme.colorScheme.surfaceVariant else typeIcon.bgTint),
             contentAlignment = Alignment.Center,
@@ -1298,14 +1313,14 @@ private fun NotificationCard(
                 AsyncImage(
                     model = avatarUrl,
                     contentDescription = singleProfile.name,
-                    modifier = Modifier.size(40.dp).clip(CircleShape),
+                    modifier = Modifier.size(48.dp).clip(CircleShape),
                 )
             } else {
                 Icon(
                     typeIcon.icon,
                     contentDescription = item.type,
                     tint = typeIcon.tint,
-                    modifier = Modifier.size(20.dp),
+                    modifier = Modifier.size(24.dp),
                 )
             }
             // Малый бейдж типа в правом нижнем углу (поверх аватара).
@@ -1314,8 +1329,8 @@ private fun NotificationCard(
             if (avatarUrl != null) {
                 Box(
                     modifier = Modifier
-                        .offset(x = 22.dp, y = 22.dp)
-                        .size(18.dp)
+                        .offset(x = 28.dp, y = 28.dp)
+                        .size(20.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.surface)
                         .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, CircleShape),
@@ -1325,28 +1340,142 @@ private fun NotificationCard(
                         typeIcon.icon,
                         contentDescription = null,
                         tint = typeIcon.tint,
-                        modifier = Modifier.size(11.dp),
+                        modifier = Modifier.size(12.dp),
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(12.dp))
 
         // ─── Контент ───
         Column(modifier = Modifier.weight(1f)) {
-            // Текст уведомления
-            Text(
-                text = linkifyVkText(
-                    item.text,
-                    linkColor,
-                    onUrlClick = { url -> openUrlExternal(context, url) },
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
+            // VK-WEB-CARD: строка заголовка — время + меню ⋮ (справа, как в VK web).
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = item.date.toRelativeTime(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+                Box {
+                    IconButton(
+                        onClick = { showContextMenu = true },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.MoreVert,
+                            contentDescription = "Меню",
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+
+                    // ─── Контекстное меню (N9) ───
+                    DropdownMenu(
+                        expanded = showContextMenu,
+                        onDismissRequest = { showContextMenu = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Открыть профиль") },
+                            onClick = {
+                                showContextMenu = false
+                                if (onUserClick != null && item.feedbackIds.isNotEmpty()) {
+                                    onUserClick(item.feedbackIds.first())
+                                }
+                            },
+                            leadingIcon = { Icon(Icons.Outlined.Visibility, null, Modifier.size(20.dp)) },
+                        )
+                        if (item.parentOwnerId != 0L) {
+                            DropdownMenuItem(
+                                text = { Text("Открыть запись") },
+                                onClick = {
+                                    showContextMenu = false
+                                    if (onPostClick != null && item.parentItemId != 0L) {
+                                        onPostClick(item.parentOwnerId, item.parentItemId)
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Subject, null, Modifier.size(20.dp)) },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Скопировать текст") },
+                            onClick = {
+                                showContextMenu = false
+                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                    as? android.content.ClipboardManager
+                                val textToCopy = item.text.ifBlank { item.parentText }
+                                if (clipboard != null && textToCopy.isNotBlank()) {
+                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("VK уведомление", textToCopy))
+                                    android.widget.Toast.makeText(context, "Скопировано", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            leadingIcon = { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(20.dp)) },
+                        )
+                        // ─── #NOTIF-NFDCAT: dots_menu действия (VK web «⋮» меню) ───
+                        if (onHideNotification != null && item.dotsMenu.any { it.isHide }) {
+                            DropdownMenuItem(
+                                text = { Text("Убрать из списка") },
+                                onClick = {
+                                    showContextMenu = false
+                                    onHideNotification(item)
+                                },
+                                leadingIcon = { Icon(Icons.Outlined.Close, null, Modifier.size(20.dp)) },
+                            )
+                        }
+                        if (onUnsubscribeNotification != null && item.dotsMenu.any { it.isUnsubscribe }) {
+                            DropdownMenuItem(
+                                text = { Text("Не уведомлять") },
+                                onClick = {
+                                    showContextMenu = false
+                                    onUnsubscribeNotification(item)
+                                },
+                                leadingIcon = { Icon(Icons.Outlined.NotificationsOff, null, Modifier.size(20.dp)) },
+                            )
+                        }
+                        if (onOpenNotificationSettings != null && item.dotsMenu.any { it.isOpenSetting }) {
+                            DropdownMenuItem(
+                                text = { Text("Настроить") },
+                                onClick = {
+                                    showContextMenu = false
+                                    onOpenNotificationSettings()
+                                },
+                                leadingIcon = { Icon(Icons.Outlined.Settings, null, Modifier.size(20.dp)) },
+                            )
+                        }
+                    }
+                }
+            }
+
+            // VK-WEB-CARD: header (имя автора, bold accent) — отдельная строка.
+            if (header.isNotBlank()) {
+                Text(
+                    text = header,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            // VK-WEB-CARD: текст уведомления (глагол без имени, как в VK web).
+            if (displayText.isNotBlank()) {
+                Text(
+                    text = linkifyVkText(
+                        displayText,
+                        linkColor,
+                        onUrlClick = { url -> openUrlExternal(context, url) },
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
 
             // Превью текста родительского поста.
             // NOTIF-FIX-1 (Task 3): убрано `&& item.type != "wall"` — раньше превью
@@ -1423,28 +1552,8 @@ private fun NotificationCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (item.bubbleText.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                ) {
-Text(
-                        text = linkifyVkText(
-                            item.bubbleText,
-                            linkColor,
-                            onUrlClick = { url -> openUrlExternal(context, url) },
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
+            // VK-WEB-CARD: bubbleText больше НЕ отдельным блоком — теперь overlay
+            // поверх превью вложения (см. AttachmentThumb с bubbleText параметром).
 
             // #NOTIF-NFDCAT: пред-кнопки (buttons.primary/secondary) — рендер ПОД
             // текстом уведомления (как VK web). Клик дефолтно открывает parent/
@@ -1500,10 +1609,9 @@ Text(
                 }
             }
 
-            // #29: notification-attachments — горизонтальный скролл всех вложений (§14.2, §14.6)
-            // Показываем LazyRow только когда вложений > 1 (одно вложение рендерится
-            // как compact-превью в правой колонке — см. thumbUrl ниже).
-            if (item.attachments.size > 1) {
+            // VK-WEB-CARD: горизонтальный скролл ВСЕХ вложений (даже одного) с bubble overlay.
+            // compact-превью в правой колонке убрано — всё через LazyRow как в VK web.
+            if (item.attachments.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1511,6 +1619,7 @@ Text(
                     items(item.attachments) { att ->
                         AttachmentThumb(
                             attachment = att,
+                            bubbleText = item.bubbleText,
                             onClick = {
                                 if (att.type == "video" || att.type == "clip") {
                                     // Видео/клип — открываем через onPostClick с owner/id
@@ -1622,25 +1731,15 @@ Text(
                 }
             }
 
-            // Нижняя строка: время + аватары
-            Spacer(Modifier.height(6.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                // Время
-                Text(
-                    text = item.date.toRelativeTime(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
-
-                // Аватары (N3) — stacked. NOTIF-FIX-1 (Task 2): скрываем row когда
-                // feedbackProfile всего один — в этом случае его аватар уже отрисован
-                // как 40dp primary visual в левом блоке, и повторять его 20dp копию
-                // в нижней строке бессмысленно (визуальный шум). Stacked-row нужен
-                // только когда несколько человек поставили лайк/коммент.
-                if (item.feedbackProfiles.size > 1) {
+            // VK-WEB-CARD: нижняя строка — только stacked аватары для multi-like.
+            // Время уже вверху (строка заголовка), multiLike имена в header для single.
+            // Для multi (feedbackProfiles.size > 1) — stacked avatars внизу.
+            if (item.feedbackProfiles.size > 1) {
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     val displayProfiles = item.feedbackProfiles.take(5)
                     Row(horizontalArrangement = Arrangement.spacedBy((-6).dp)) {
                         displayProfiles.forEachIndexed { index, profile ->
@@ -1676,198 +1775,29 @@ Text(
                             )
                         }
                     }
-                }
-            }
-
-            // #NOTIF-MULTILK-NAMES: компактная сводка имён для случая «несколько
-            // человек поставили лайк/реакцию» («Имя1, Имя2 и ещё N»). Показываем
-            // когда profiles > 1 — тогда выше рисуется ряд аватаров, а здесь
-            // короткая подпись, КТО именно отреагировал (требование фичи
-            // #FEEDBACK-MULTILIKE: карточка должна показывать кто лайкнул).
-            // До 2 имён из списка feedbackProfiles (порядок как вернул VK),
-            // при большем числе — «и ещё N».
-            if (item.feedbackProfiles.size > 1) {
-                val names = buildString {
-                    item.feedbackProfiles.take(2).forEachIndexed { i, p ->
-                        if (i > 0) append(", ")
-                        append(if (p.name.isNotBlank()) p.name else "id${p.id}")
-                    }
-                    val rest = item.feedbackProfiles.size - 2
-                    if (rest > 0) append(" и ещё $rest")
-                }
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = names,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-
-        // ─── Медиа-превью (N4) — compact, только когда attachments ≤ 1 ───
-        // Когда attachments > 1, они рендерятся в LazyRow выше (в правой колонке
-        // не хватает места). Compact-превью — для одного фото/видео.
-        if (item.attachments.size <= 1) {
-            val thumbUrl = item.parentPhotoUrl ?: item.parentVideoThumb
-            // NOTIF-VIDEO-THUMB: если для одиночного видео-вложения превью не пришло
-            // (getRedesign не отдаёт URL видео-превью), не оставляем карточку «голой» —
-            // рисуем компактный плейсхолдер с видео-иконкой (как в AttachmentThumb).
-            val singleType = item.attachments.firstOrNull()?.type
-            val isVideoFallback = thumbUrl == null &&
-                (singleType == "video" || singleType == "clip")
-            if (thumbUrl != null || isVideoFallback) {
-                Spacer(modifier = Modifier.width(10.dp))
-                Box(
-                    modifier = Modifier
-                        .size(56.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        // FIX-C: одиночное фото (parentPhotoUrl) — открываем native PhotoViewer.
-                        // Раньше compact-превью вообще не имело клика. Видео (parentVideoThumb)
-                        // кликом не наделяем — для него остаётся общий клик по карточке (navigate).
-                        .then(
-                            if (item.parentPhotoUrl != null) {
-                                Modifier.clickable(
-                                    role = androidx.compose.ui.semantics.Role.Button,
-                                    // listOfNotNull — гарантия List<String> (без smart-cast в лямбде).
-                                    onClick = { onPhotoClick(listOfNotNull(item.parentPhotoUrl), 0) },
-                                )
-                            } else {
-                                Modifier
-                            },
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (thumbUrl != null) {
-                        AsyncImage(
-                            model = thumbUrl,
-                            contentDescription = "Превью",
-                            modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
-                        )
-                    } else {
-                        Icon(
-                            Icons.Outlined.VideoCameraBack,
-                            contentDescription = "Видео",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(28.dp),
-                        )
-                    }
-                    // Play-иконка для видео
-                    if (thumbUrl != null && (item.parentVideoThumb != null || singleType == "clip")) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .background(Color.Black.copy(alpha = 0.5f), CircleShape),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                Icons.Outlined.PlayCircle,
-                                contentDescription = "Видео",
-                                tint = Color.White,
-                                modifier = Modifier.size(16.dp),
-                            )
+                    // VK-WEB-CARD: compact names summary для multi-like.
+                    val names = buildString {
+                        item.feedbackProfiles.take(2).forEachIndexed { i, p ->
+                            if (i > 0) append(", ")
+                            append(if (p.name.isNotBlank()) p.name else "id${p.id}")
                         }
+                        val rest = item.feedbackProfiles.size - 2
+                        if (rest > 0) append(" и ещё $rest")
                     }
+                    Text(
+                        text = names,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         }
 
-        // #29: notification-menu — отдельная кнопка ⋮ (§14.2)
-        // Раньше меню открывалось только long-press. Теперь есть видимая кнопка.
-        Box {
-            IconButton(
-                onClick = { showContextMenu = true },
-                modifier = Modifier.size(32.dp),
-            ) {
-                Icon(
-                    Icons.Outlined.MoreVert,
-                    contentDescription = "Меню",
-                    tint = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-
-            // ─── Контекстное меню (N9) ───
-            val context = LocalContext.current
-            DropdownMenu(
-                expanded = showContextMenu,
-                onDismissRequest = { showContextMenu = false },
-            ) {
-                DropdownMenuItem(
-                    text = { Text("Открыть профиль") },
-                    onClick = {
-                        showContextMenu = false
-                        if (onUserClick != null && item.feedbackIds.isNotEmpty()) {
-                            onUserClick(item.feedbackIds.first())
-                        }
-                    },
-                    leadingIcon = { Icon(Icons.Outlined.Visibility, null, Modifier.size(20.dp)) },
-                )
-                if (item.parentOwnerId != 0L) {
-                    DropdownMenuItem(
-                        text = { Text("Открыть запись") },
-                        onClick = {
-                            showContextMenu = false
-                            if (onPostClick != null && item.parentItemId != 0L) {
-                                onPostClick(item.parentOwnerId, item.parentItemId)
-                            }
-                        },
-                        leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Subject, null, Modifier.size(20.dp)) },
-                    )
-                }
-                DropdownMenuItem(
-                    text = { Text("Скопировать текст") },
-                    onClick = {
-                        showContextMenu = false
-                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                            as? android.content.ClipboardManager
-                        val textToCopy = item.text.ifBlank { item.parentText }
-                        if (clipboard != null && textToCopy.isNotBlank()) {
-                            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("VK уведомление", textToCopy))
-                            android.widget.Toast.makeText(context, "Скопировано", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(20.dp)) },
-                )
-                // ─── #NOTIF-NFDCAT: dots_menu действия (VK web «⋮» меню) ───
-                // hide_notification → «Убрать из списка», unsubscribe → «Не уведомлять»,
-                // open_setting → «Настроить». hide/unsubscribe: локальный dismiss + undo
-                // (UX-приоритет) + best-effort API-вызов (см. NotificationsScreen helper'ы).
-                // open_setting: переход на экран настроек уведомлений.
-                if (onHideNotification != null && item.dotsMenu.any { it.isHide }) {
-                    DropdownMenuItem(
-                        text = { Text("Убрать из списка") },
-                        onClick = {
-                            showContextMenu = false
-                            onHideNotification(item)
-                        },
-                        leadingIcon = { Icon(Icons.Outlined.Close, null, Modifier.size(20.dp)) },
-                    )
-                }
-                if (onUnsubscribeNotification != null && item.dotsMenu.any { it.isUnsubscribe }) {
-                    DropdownMenuItem(
-                        text = { Text("Не уведомлять") },
-                        onClick = {
-                            showContextMenu = false
-                            onUnsubscribeNotification(item)
-                        },
-                        leadingIcon = { Icon(Icons.Outlined.NotificationsOff, null, Modifier.size(20.dp)) },
-                    )
-                }
-                if (onOpenNotificationSettings != null && item.dotsMenu.any { it.isOpenSetting }) {
-                    DropdownMenuItem(
-                        text = { Text("Настроить") },
-                        onClick = {
-                            showContextMenu = false
-                            onOpenNotificationSettings()
-                        },
-                        leadingIcon = { Icon(Icons.Outlined.Settings, null, Modifier.size(20.dp)) },
-                    )
-                }
-            }
-        }
+        // VK-WEB-CARD: compact-превью и отдельная кнопка ⋮ в правой колонке УБРАНЫ.
+        // Все вложения рендерятся в LazyRow внутри Column (с bubble overlay).
+        // Меню ⋮ перенесено в верхнюю строку заголовка (справа от времени).
     }
 }
 
@@ -1879,6 +1809,9 @@ Text(
 private fun AttachmentThumb(
     attachment: VKApiClient.NotificationAttachment,
     onClick: () -> Unit,
+    // VK-WEB-CARD: bubble-text overlay поверх превью (как в VK web — текст комментария
+    // на превью клипа/видео). Пустая строка — overlay не рендерится.
+    bubbleText: String = "",
 ) {
     Box(
         modifier = Modifier
@@ -1922,6 +1855,32 @@ private fun AttachmentThumb(
                     contentDescription = "Воспроизвести",
                     tint = Color.White,
                     modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        // VK-WEB-CARD: bubble-text overlay — текст комментария поверх превью (внизу).
+        // Полупрозрачный gradient-фон + 2 строки текста (как в VK web).
+        if (bubbleText.isNotBlank()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.75f),
+                            ),
+                        ),
+                    )
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    text = bubbleText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
