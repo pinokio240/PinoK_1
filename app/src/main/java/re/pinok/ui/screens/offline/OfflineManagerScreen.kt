@@ -1602,12 +1602,14 @@ private fun StoryOfflineRow(
             .then(
                 if (canPlay) {
                     Modifier.combinedClickable(
-                        onClick = onPlay,
+                        onClick = onClick,
                         onLongClick = { showLocationMenu = true },
                     )
                 } else {
+                    // canPlay=false (guest-режим): короткий тап ничего не делает,
+                    // long-press открывает меню «Расположение».
                     Modifier.combinedClickable(
-                        onClick = { showLocationMenu = true },
+                        onClick = {},
                         onLongClick = { showLocationMenu = true },
                     )
                 }
@@ -1927,8 +1929,10 @@ private fun ClipOfflineRow(
                         onLongClick = { showLocationMenu = true },
                     )
                 } else {
+                    // canPlay=false (guest-режим): короткий тап ничего не делает,
+                    // long-press открывает меню «Расположение».
                     Modifier.combinedClickable(
-                        onClick = { showLocationMenu = true },
+                        onClick = {},
                         onLongClick = { showLocationMenu = true },
                     )
                 }
@@ -2117,30 +2121,34 @@ private fun formatDownloadedAt(timestampMs: Long): String {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-//  DL-LOCATION: открытие папки со скачанным файлом в системном
+//  DL-LOCATION: открытие ПАПКИ со скачанным файлом в системном
 //  файловом менеджере. Вызывается из long-press меню всех 4 Row
 //  (AudioOfflineRow / VideoOfflineRow / StoryOfflineRow / ClipOfflineRow).
+//
+//  Важно: открываем ТОЛЬКО папку, не сам файл. Если папку открыть не
+//  удалось — Toast с путём. Воспроизведение тут не нужно (для этого
+//  есть обычный тап по строке).
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Открывает системный файловый менеджер на папке, содержащей [file].
+ * Открывает системный файловый менеджер на ПАПКЕ, содержащей [file].
  *
- * Стратегия:
+ * Стратегия (только папка, без открытия самого файла):
  *  1. FileProvider.getUriForFile → content:// URI папки (file.parentFile).
- *     FileProvider уже объявлен в AndroidManifest (authority: ${pkg}.fileprovider),
- *     file_paths.xml расширен external-path (см. res/xml/file_paths.xml:6).
- *     ACTION_VIEW + type "resource/folder" — стандартный mime-type для папок,
- *     поддерживается большинством файловых менеджеров (Files, Solid Explorer,
- *     MiXplorer, Cx Проводник).
+ *     FileProvider объявлен в AndroidManifest (authority: ${pkg}.fileprovider),
+ *     file_paths.xml содержит <external-path> (см. res/xml/file_paths.xml).
+ *     ACTION_VIEW + mime «resource/folder» — стандартный mime-type для папок,
+ *     поддерживается большинством файловых менеджеров (Solid Explorer,
+ *     MiXplorer, Cx Проводник, Files by Google на некоторых прошивках).
  *  2. Если resource/folder не поддерживается (ActivityNotFoundException) —
- *     fallback: ACTION_VIEW с самим файлом + его mime-типом (откроется ассоциированное
- *     приложение — видеоплеер/музыкальный плеер; не папка, но лучше чем ничего).
- *  3. Если FileProvider не может предоставить URI (IllegalArgumentException —
- *     файл вне покрытых путей, например SD-карта SAF tree URI) — Toast с путём.
+ *     повтор с mime «vnd.android.document/directory» (альтернативный mime
+ *     для папок, используется DocumentsUI и некоторыми проводниками).
+ *  3. Если и он не поддерживается — Toast с полным путём к файлу
+ *     (пользователь откроет папку вручную в любом проводнике).
  *
  * На Android 7+ (API 24+) file:// URI в Intent запрещён (FileUriExposedException),
- * поэтому обязателен FileProvider. На Android 6 и ниже file:// тоже работает,
- * но FileProvider работает везде — используем единый путь.
+ * поэтому обязателен FileProvider. На Android 6 и ниже тоже работает —
+ * используем единый путь.
  */
 private fun openFileLocation(context: Context, file: File?) {
     if (file == null || !file.exists()) {
@@ -2153,62 +2161,55 @@ private fun openFileLocation(context: Context, file: File?) {
         return
     }
     val authority = "${context.packageName}.fileprovider"
-    // Попытка 1: открыть папку через FileProvider + ACTION_VIEW + resource/folder.
-    try {
-        val folderUri = FileProvider.getUriForFile(context, authority, folder)
-        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(folderUri, "resource/folder")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(viewIntent)
-        AppLog.i(TAG, "openFileLocation: opened folder ${folder.absolutePath} via FileProvider")
-        return
+    // content:// URI папки. Один раз строим — переиспользуем в обеих попытках.
+    val folderUri = try {
+        FileProvider.getUriForFile(context, authority, folder)
     } catch (e: IllegalArgumentException) {
-        // FileProvider не покрывает этот путь (например, SD-карта через SAF tree URI).
+        // FileProvider не покрывает этот путь (например, SD-карта через SAF
+        // tree URI — там путь не File-based). Показываем Toast с путём.
         AppLog.w(TAG, "openFileLocation: FileProvider cannot share ${folder.absolutePath}: ${e.message}")
-    } catch (e: ActivityNotFoundException) {
-        // resource/folder mime-type не поддерживается — пробуем fallback ниже.
-        AppLog.w(TAG, "openFileLocation: no handler for resource/folder, trying file fallback")
-    }
-    // Попытка 2: открыть сам файл через FileProvider (пользователь увидит файл
-    // в ассоциированном приложении — не папку, но хотя бы покажет содержимое).
-    try {
-        val fileUri = FileProvider.getUriForFile(context, authority, file)
-        val mime = guessMimeType(file)
-        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(fileUri, mime)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(viewIntent)
-        AppLog.i(TAG, "openFileLocation: opened file ${file.name} (mime=$mime) via FileProvider")
+        Toast.makeText(
+            context,
+            "Папка вне FileProvider:\n${folder.absolutePath}",
+            Toast.LENGTH_LONG,
+        ).show()
         return
-    } catch (e: IllegalArgumentException) {
-        AppLog.w(TAG, "openFileLocation: file fallback also failed: ${e.message}")
-    } catch (e: ActivityNotFoundException) {
-        AppLog.w(TAG, "openFileLocation: no handler for mime, falling to Toast")
     }
-    // Попытка 3: показываем путь в Toast (last resort — юзер скопирует вручную).
+    // Попытка 1: ACTION_VIEW + «resource/folder» — самый распространённый mime.
+    if (tryViewFolder(context, folderUri, "resource/folder")) {
+        AppLog.i(TAG, "openFileLocation: opened folder ${folder.absolutePath} (resource/folder)")
+        return
+    }
+    // Попытка 2: ACTION_VIEW + «vnd.android.document/directory» — альтернатива.
+    if (tryViewFolder(context, folderUri, "vnd.android.document/directory")) {
+        AppLog.i(TAG, "openFileLocation: opened folder ${folder.absolutePath} (vnd.android.document/directory)")
+        return
+    }
+    // Попытка 3: показываем путь в Toast (последнее средство — юзер откроет
+    // проводник сам и вставит/найдёт путь).
+    AppLog.w(TAG, "openFileLocation: no file-manager handler for folder URI, showing Toast")
     Toast.makeText(
         context,
-        "Путь к файлу:\n${file.absolutePath}",
+        "Папка:\n${folder.absolutePath}",
         Toast.LENGTH_LONG,
     ).show()
 }
 
 /**
- * Грубая оценка mime-типа по расширению файла. Используется только для fallback
- * в [openFileLocation] (когда FileProvider есть, но resource/folder не сработал).
- * ContentResolver.getMimeType не работает с File-объектами напрямую — поэтому
- * расширение-свитч. Покрывает все форматы, которые сохраняют менеджеры PinoK.
+ * Запускает ACTION_VIEW с переданным folder URI и mime-типом.
+ * Возвращает true если Intent успешно стартовал, false если ActivityNotFoundException
+ * (нет приложения, умеющего открывать папки с этим mime).
  */
-private fun guessMimeType(file: File): String {
-    val name = file.name.lowercase()
-    return when {
-        name.endsWith(".mp4") -> "video/mp4"
-        name.endsWith(".m4a") -> "audio/mp4"
-        name.endsWith(".mp3") -> "audio/mpeg"
-        name.endsWith(".ts") -> "video/mp2t"
-        name.endsWith(".aac") -> "audio/aac"
-        else -> "application/octet-stream"
+private fun tryViewFolder(context: Context, folderUri: Uri, mime: String): Boolean {
+    val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(folderUri, mime)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    return try {
+        context.startActivity(viewIntent)
+        true
+    } catch (e: ActivityNotFoundException) {
+        AppLog.w(TAG, "tryViewFolder: no handler for mime=$mime")
+        false
     }
 }
