@@ -253,8 +253,10 @@ object ClipVideoDownloadManager {
         ensureInitialized()
         val fileKey = pickBestKey(video.files)
         if (fileKey == null) {
-            // DL-EXPLICIT: явный if вместо `video.files?.size ?: 0` в логе.
-            val filesCount = if (video.files != null) video.files.size else 0
+            // DL-EXPLICIT: заворачиваем в локальный val для smart-cast
+            // (video.files — public property из другого модуля, smart-cast напрямую невозможен).
+            val filesMap = video.files
+            val filesCount = if (filesMap != null) filesMap.size else 0
             AppLog.w(TAG, "enqueueDownload: clip #${video.id} has no downloadable URL (files=$filesCount)")
             return
         }
@@ -282,8 +284,9 @@ object ClipVideoDownloadManager {
         // Скачиванию нужен свой порядок + kind (см. [pickSourceByKey]).
         val src = pickSourceByKey(video.files, fileKey)
         if (src == null) {
-            // DL-EXPLICIT: явный if вместо `video.files?.size ?: 0` в логе.
-            val filesCount = if (video.files != null) video.files.size else 0
+            // DL-EXPLICIT: заворачиваем в локальный val для smart-cast.
+            val filesMap = video.files
+            val filesCount = if (filesMap != null) filesMap.size else 0
             AppLog.w(TAG, "enqueueDownload: clip #${video.id} fileKey=$fileKey не найден в files (size=$filesCount)")
             return
         }
@@ -689,8 +692,9 @@ object ClipVideoDownloadManager {
             val video = app.apiClient.videoGetClipById(ownerId, videoId, accessKey)
             if (video != null) {
                 val src = pickClipSource(video.files)
-                // DL-EXPLICIT: явный if вместо `video.files?.size ?: 0` в логе.
-                val filesCount = if (video.files != null) video.files.size else 0
+                // DL-EXPLICIT: заворачиваем в локальный val для smart-cast.
+                val filesMap = video.files
+                val filesCount = if (filesMap != null) filesMap.size else 0
                 val accessKeyStr = if (video.accessKey != null) "yes" else "no"
                 AppLog.i(TAG, "refreshClipUrl: got fresh source for clip $ownerId/$videoId: $src " +
                     "(files=$filesCount, accessKey=$accessKeyStr)")
