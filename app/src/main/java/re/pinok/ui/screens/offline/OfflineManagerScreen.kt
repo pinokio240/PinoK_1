@@ -2206,10 +2206,10 @@ private fun openFileLocation(context: Context, file: File?, fallbackFolder: File
     val isPrimaryExternal = folderPath == externalRoot ||
         folderPath.startsWith(externalRoot + "/")
     if (isPrimaryExternal) {
-        // DL-LOCATION-FIX6: FileProvider + ACTION_VIEW + resource/folder + chooser.
-        // PinoK имеет права на свои FileProvider URI, FLAG_GRANT_READ_URI_PERMISSION
-        // грантит URI получателю. resource/folder — mime-type папки, поддерживается
-        // большинством проводников (Solid Explorer, Cx Проводник, FX, Total Commander).
+        // DL-LOCATION-FIX7: FileProvider + ACTION_VIEW + resource/folder.
+        // ВАЖНО: нужен <queries> в AndroidManifest для mime "resource/folder"
+        // и "vnd.android.document/directory" — иначе на Android 11+ (API 30+)
+        // resolveActivity() вернёт null (package visibility restrictions).
         val authority = "${context.packageName}.fileprovider"
         val folderUri = try {
             FileProvider.getUriForFile(context, authority, folder)
@@ -2222,6 +2222,19 @@ private fun openFileLocation(context: Context, file: File?, fallbackFolder: File
             ).show()
             return
         }
+        // Попытка 1: ACTION_VIEW + resource/folder ( mime-type папки).
+        var success = tryStartActivity(context, folderUri, "resource/folder")
+        if (success) {
+            AppLog.i(TAG, "openFileLocation: opened folder via resource/folder: $folderPath")
+            return
+        }
+        // Попытка 2: ACTION_VIEW + vnd.android.document/directory (альтернативный mime).
+        success = tryStartActivity(context, folderUri, "vnd.android.document/directory")
+        if (success) {
+            AppLog.i(TAG, "openFileLocation: opened folder via vnd.android.document/directory: $folderPath")
+            return
+        }
+        // Попытка 3: chooser — пусть пользователь выберет приложение сам.
         val viewIntent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(folderUri, "resource/folder")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -2231,12 +2244,10 @@ private fun openFileLocation(context: Context, file: File?, fallbackFolder: File
         }
         try {
             context.startActivity(chooser)
-            AppLog.i(TAG, "openFileLocation: opened folder via chooser (resource/folder): $folderPath")
+            AppLog.i(TAG, "openFileLocation: opened folder via chooser: $folderPath")
             return
         } catch (e: ActivityNotFoundException) {
-            AppLog.w(TAG, "openFileLocation: no file manager for resource/folder")
-        } catch (e: SecurityException) {
-            AppLog.w(TAG, "openFileLocation: SecurityException on chooser: ${e.message}")
+            AppLog.w(TAG, "openFileLocation: no file manager at all: ${e.message}")
         }
     }
 
@@ -2295,4 +2306,30 @@ private fun openFileLocation(context: Context, file: File?, fallbackFolder: File
         "Папка:\n$folderPath",
         Toast.LENGTH_LONG,
     ).show()
+}
+
+/**
+ * DL-LOCATION-FIX7: пытается запустить ACTION_VIEW с указанным URI и mime-типом.
+ * Возвращает true если Intent успешно стартовал, false если нет приложения
+ * (ActivityNotFoundException) или сработало SecurityException.
+ *
+ * НЕ использует resolveActivity — на Android 11+ (API 30+) он возвращает null
+ * даже если приложение установлено, если только mime-type не объявлен в <queries>
+ * в AndroidManifest. Вместо этого сразу вызываем startActivity и ловим исключение.
+ */
+private fun tryStartActivity(context: Context, uri: Uri, mime: String): Boolean {
+    val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, mime)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    return try {
+        context.startActivity(viewIntent)
+        true
+    } catch (e: ActivityNotFoundException) {
+        AppLog.w(TAG, "tryStartActivity: no handler for mime=$mime")
+        false
+    } catch (e: SecurityException) {
+        AppLog.w(TAG, "tryStartActivity: SecurityException for mime=$mime: ${e.message}")
+        false
+    }
 }

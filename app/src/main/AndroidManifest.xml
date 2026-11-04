@@ -183,6 +183,19 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="vklink" />
         </intent>
+        <!-- DL-LOCATION-FIX7: package visibility для ACTION_VIEW + resource/folder
+             (mime-type папки). Без этого на Android 11+ (API 30+) resolveActivity()
+             возвращает null — chooser пустой, startActivity падает в Toast.
+             С этим queries система видит установленные проводники (Files, Solid
+             Explorer, Cx Проводник) и может их запустить для открытия папки. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="resource/folder" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="vnd.android.document/directory" />
+        </intent>
     </queries>
 
     <application
