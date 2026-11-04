@@ -1602,7 +1602,7 @@ private fun StoryOfflineRow(
             .then(
                 if (canPlay) {
                     Modifier.combinedClickable(
-                        onClick = onClick,
+                        onClick = onPlay,
                         onLongClick = { showLocationMenu = true },
                     )
                 } else {
