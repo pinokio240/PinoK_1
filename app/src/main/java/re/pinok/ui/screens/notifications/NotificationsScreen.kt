@@ -1501,14 +1501,14 @@ private fun NotificationCard(
                 }
             }
 
-            // VK-WEB-CARD: header (имя автора, bold) — отдельная строка, КЛИКАБЕЛЬНАЯ.
-            // VK web: имя БЕЛОЕ (onSurface), не синее. Клик → профиль.
+            // VK-WEB-CARD: header (имя автора, bold accent) — отдельная строка, КЛИКАБЕЛЬНАЯ.
+            // Цветовая тема PinoK сохранена (primary/accent). Клик → профиль.
             if (header.isNotBlank()) {
                 Text(
                     text = header,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
