@@ -4,6 +4,8 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
+import android.provider.DocumentsContract
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -2125,30 +2127,37 @@ private fun formatDownloadedAt(timestampMs: Long): String {
 //  файловом менеджере. Вызывается из long-press меню всех 4 Row
 //  (AudioOfflineRow / VideoOfflineRow / StoryOfflineRow / ClipOfflineRow).
 //
-//  Важно: открываем ТОЛЬКО папку, не сам файл. Если папку открыть не
-//  удалось — Toast с путём. Воспроизведение тут не нужно (для этого
-//  есть обычный тап по строке).
+//  Важно: открываем ТОЛЬКО папку, не сам файл. Воспроизведение тут не нужно.
 // ══════════════════════════════════════════════════════════════════════
 
 /**
  * Открывает системный файловый менеджер на ПАПКЕ, содержащей [file].
  *
- * Стратегия (только папка, без открытия самого файла):
- *  1. FileProvider.getUriForFile → content:// URI папки (file.parentFile).
- *     FileProvider объявлен в AndroidManifest (authority: ${pkg}.fileprovider),
- *     file_paths.xml содержит <external-path> (см. res/xml/file_paths.xml).
- *     ACTION_VIEW + mime «resource/folder» — стандартный mime-type для папок,
- *     поддерживается большинством файловых менеджеров (Solid Explorer,
- *     MiXplorer, Cx Проводник, Files by Google на некоторых прошивках).
- *  2. Если resource/folder не поддерживается (ActivityNotFoundException) —
- *     повтор с mime «vnd.android.document/directory» (альтернативный mime
- *     для папок, используется DocumentsUI и некоторыми проводниками).
- *  3. Если и он не поддерживается — Toast с полным путём к файлу
- *     (пользователь откроет папку вручную в любом проводнике).
+ * Три разных сценария по расположению файла:
+ *
+ *  **1. Primary external storage** (`/storage/emulated/0/...` —Movies/PinoK/,
+ *  Music/PinoK/):
+ *   - Строим DocumentsContract URI через стандартный системный authority
+ *     `com.android.externalstorage.documents` (есть на ВСЕХ Android-устройствах
+ *     с API 19+, part of framework).
+ *   - `ACTION_VIEW` + mime `vnd.android.document/directory` → системный Files
+ *     (DocumentsUI) открывает папку и показывает файлы внутри.
+ *   - Не требует MANAGE_EXTERNAL_STORAGE — DocumentsUI имеет свои права на
+ *     просмотр external storage.
+ *
+ *  **2. Internal app storage** (`/data/data/re.pinok/files/...`):
+ *   - Системный проводник НЕ имеет прав туда читать (Scoped Storage).
+ *   - Показываем Toast с пояснением: файлы в защищённом хранилище приложения,
+ *     видны только PinoK; чтобы они были в /Movies/PinoK/, надо выдать
+ *     MANAGE_EXTERNAL_STORAGE (ссылка на Настройки в Toast).
+ *
+ *  **3. SD-карта / кастомный путь**:
+ *   - FileProvider + Intent.createChooser с mime `resource/folder` — пусть
+ *     пользователь выберет любой установленный проводник (Solid Explorer,
+ *     Cx Проводник, FX, Total Commander — они поддерживают resource/folder).
  *
  * На Android 7+ (API 24+) file:// URI в Intent запрещён (FileUriExposedException),
- * поэтому обязателен FileProvider. На Android 6 и ниже тоже работает —
- * используем единый путь.
+ * поэтому везде используем content:// через FileProvider или DocumentsContract.
  */
 private fun openFileLocation(context: Context, file: File?) {
     if (file == null || !file.exists()) {
@@ -2160,56 +2169,88 @@ private fun openFileLocation(context: Context, file: File?) {
         Toast.makeText(context, "Папка не найдена:\n${file.absolutePath}", Toast.LENGTH_LONG).show()
         return
     }
-    val authority = "${context.packageName}.fileprovider"
-    // content:// URI папки. Один раз строим — переиспользуем в обеих попытках.
-    val folderUri = try {
-        FileProvider.getUriForFile(context, authority, folder)
-    } catch (e: IllegalArgumentException) {
-        // FileProvider не покрывает этот путь (например, SD-карта через SAF
-        // tree URI — там путь не File-based). Показываем Toast с путём.
-        AppLog.w(TAG, "openFileLocation: FileProvider cannot share ${folder.absolutePath}: ${e.message}")
+    val folderPath = folder.absolutePath
+
+    // ─── Случай 1: primary external storage ───────────────────────────
+    // /storage/emulated/0/Movies/PinoK, /storage/emulated/0/Music/PinoK.
+    // Используем DocumentsContract — системный Files умеет открывать папки.
+    val externalRoot = Environment.getExternalStorageDirectory().absolutePath
+    val isPrimaryExternal = folderPath == externalRoot ||
+        folderPath.startsWith(externalRoot + "/")
+    if (isPrimaryExternal) {
+        // relative к externalRoot: «Movies/PinoK» или «Music/PinoK».
+        val relative = folderPath.removePrefix(externalRoot).removePrefix("/")
+        // documentId в формате «primary:<relative path>» — стандарт для
+        // com.android.externalstorage.documents.
+        val documentId = if (relative.isEmpty()) "primary:" else "primary:$relative"
+        val treeUri = DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents",
+            documentId,
+        )
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(treeUri, "vnd.android.document/directory")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            context.startActivity(viewIntent)
+            AppLog.i(TAG, "openFileLocation: opened folder via DocumentsContract: $folderPath")
+            return
+        } catch (e: ActivityNotFoundException) {
+            AppLog.w(TAG, "openFileLocation: DocumentsUI not available, trying chooser fallback")
+        }
+    }
+
+    // ─── Случай 2: internal app storage ──────────────────────────────
+    // Файлы в /data/data/re.pinok/files/... — обычный проводник не имеет прав.
+    val internalDirs = listOf(
+        context.filesDir.absolutePath,
+        context.cacheDir.absolutePath,
+        context.noBackupFilesDir.absolutePath,
+    )
+    if (internalDirs.any { folderPath.startsWith(it) }) {
         Toast.makeText(
             context,
-            "Папка вне FileProvider:\n${folder.absolutePath}",
+            "Файл в защищённом хранилище приложения:\n$folderPath\n\n" +
+                "Проводник его не видит. Чтобы файлы сохранялись в /Movies/PinoK/ " +
+                "(доступно проводнику), выдайте «Доступ ко всем файлам» в Настройках " +
+                "→ Папка для скачанных видео.",
             Toast.LENGTH_LONG,
         ).show()
         return
     }
-    // Попытка 1: ACTION_VIEW + «resource/folder» — самый распространённый mime.
-    if (tryViewFolder(context, folderUri, "resource/folder")) {
-        AppLog.i(TAG, "openFileLocation: opened folder ${folder.absolutePath} (resource/folder)")
-        return
-    }
-    // Попытка 2: ACTION_VIEW + «vnd.android.document/directory» — альтернатива.
-    if (tryViewFolder(context, folderUri, "vnd.android.document/directory")) {
-        AppLog.i(TAG, "openFileLocation: opened folder ${folder.absolutePath} (vnd.android.document/directory)")
-        return
-    }
-    // Попытка 3: показываем путь в Toast (последнее средство — юзер откроет
-    // проводник сам и вставит/найдёт путь).
-    AppLog.w(TAG, "openFileLocation: no file-manager handler for folder URI, showing Toast")
-    Toast.makeText(
-        context,
-        "Папка:\n${folder.absolutePath}",
-        Toast.LENGTH_LONG,
-    ).show()
-}
 
-/**
- * Запускает ACTION_VIEW с переданным folder URI и mime-типом.
- * Возвращает true если Intent успешно стартовал, false если ActivityNotFoundException
- * (нет приложения, умеющего открывать папки с этим mime).
- */
-private fun tryViewFolder(context: Context, folderUri: Uri, mime: String): Boolean {
+    // ─── Случай 3: SD-карта / прочий путь — FileProvider + chooser ───
+    val authority = "${context.packageName}.fileprovider"
+    val folderUri = try {
+        FileProvider.getUriForFile(context, authority, folder)
+    } catch (e: IllegalArgumentException) {
+        AppLog.w(TAG, "openFileLocation: FileProvider cannot share ${folder.absolutePath}: ${e.message}")
+        Toast.makeText(
+            context,
+            "Папка:\n$folderPath",
+            Toast.LENGTH_LONG,
+        ).show()
+        return
+    }
     val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(folderUri, mime)
+        setDataAndType(folderUri, "resource/folder")
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
     }
-    return try {
-        context.startActivity(viewIntent)
-        true
-    } catch (e: ActivityNotFoundException) {
-        AppLog.w(TAG, "tryViewFolder: no handler for mime=$mime")
-        false
+    // createChooser — даёт пользователю выбор из установленных проводников.
+    val chooser = Intent.createChooser(viewIntent, "Открыть папку").apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
+    try {
+        context.startActivity(chooser)
+        AppLog.i(TAG, "openFileLocation: opened folder via chooser (resource/folder): $folderPath")
+        return
+    } catch (e: ActivityNotFoundException) {
+        AppLog.w(TAG, "openFileLocation: no file manager, showing Toast with path")
+    }
+    // Last resort: Toast с путём к папке.
+    Toast.makeText(
+        context,
+        "Папка:\n$folderPath",
+        Toast.LENGTH_LONG,
+    ).show()
 }
