@@ -2173,30 +2173,46 @@ private fun openFileLocation(context: Context, file: File?) {
 
     // ─── Случай 1: primary external storage ───────────────────────────
     // /storage/emulated/0/Movies/PinoK, /storage/emulated/0/Music/PinoK.
-    // Используем DocumentsContract — системный Files умеет открывать папки.
+    //
+    // DL-LOCATION-FIX: Прежний подход через DocumentsContract.buildDocumentUri +
+    // ACTION_VIEW падал с SecurityException — DocumentsProvider требует
+    // persistent URI permission (через ACTION_OPEN_DOCUMENT), который пользователь
+    // НЕ выдавал для этого пути. FLAG_GRANT_READ_URI_PERMISSION даёт временный
+    // grant только для собственных URI приложения.
+    //
+    // Новая стратегия: на Android 10+ (API 29+) используем ACTION_VIEW без URI
+    // и без mime-типа, но с EXTRA_INITIAL_URI (DocumentsUI открывает Files на
+    // нужной папке). На Android 7-9 (API 24-28) этот extra игнорируется —
+    // ACTION_VIEW без URI открывает корень external storage (менее идеально,
+    // но без краша).
     val externalRoot = Environment.getExternalStorageDirectory().absolutePath
     val isPrimaryExternal = folderPath == externalRoot ||
         folderPath.startsWith(externalRoot + "/")
     if (isPrimaryExternal) {
-        // relative к externalRoot: «Movies/PinoK» или «Music/PinoK».
-        val relative = folderPath.removePrefix(externalRoot).removePrefix("/")
-        // documentId в формате «primary:<relative path>» — стандарт для
-        // com.android.externalstorage.documents.
-        val documentId = if (relative.isEmpty()) "primary:" else "primary:$relative"
-        val treeUri = DocumentsContract.buildDocumentUri(
-            "com.android.externalstorage.documents",
-            documentId,
-        )
         val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(treeUri, "vnd.android.document/directory")
+            // EXTRA_INITIAL_URI — Android 10+ (API 29+): DocumentsUI открывает
+            // сразу нужную папку, БЕЗ требования persistent URI permission
+            // (intent идёт к DocumentsUI, а не к content://com.android.externalstorage).
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                val initialUri = Uri.Builder().scheme("content").build()
+                putExtra(
+                    android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+                    initialUri,
+                )
+            }
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         try {
             context.startActivity(viewIntent)
-            AppLog.i(TAG, "openFileLocation: opened folder via DocumentsContract: $folderPath")
+            AppLog.i(TAG, "openFileLocation: opened Files via ACTION_VIEW (no URI): $folderPath")
             return
         } catch (e: ActivityNotFoundException) {
-            AppLog.w(TAG, "openFileLocation: DocumentsUI not available, trying chooser fallback")
+            AppLog.w(TAG, "openFileLocation: no default Files app, trying chooser fallback")
+        } catch (e: SecurityException) {
+            // DL-LOCATION-FIX: DocumentsProvider теоретически может выбросить
+            // SecurityException даже для ACTION_VIEW без URI — ловим и падаем
+            // дальше в chooser-fallback.
+            AppLog.w(TAG, "openFileLocation: SecurityException on ACTION_VIEW: ${e.message}")
         }
     }
 
@@ -2246,6 +2262,8 @@ private fun openFileLocation(context: Context, file: File?) {
         return
     } catch (e: ActivityNotFoundException) {
         AppLog.w(TAG, "openFileLocation: no file manager, showing Toast with path")
+    } catch (e: SecurityException) {
+        AppLog.w(TAG, "openFileLocation: SecurityException on chooser: ${e.message}")
     }
     // Last resort: Toast с путём к папке.
     Toast.makeText(
