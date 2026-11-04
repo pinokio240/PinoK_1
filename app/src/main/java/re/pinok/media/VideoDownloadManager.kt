@@ -155,10 +155,9 @@ object VideoDownloadManager {
                 refreshFromDisk()
                 return
             } else {
-                AppLog.w(TAG, "reconfigurePath: SD-карта URI not accessible — $treeUri, falling back to internal")
+                AppLog.w(TAG, "reconfigurePath: SD-карта URI not accessible — $treeUri, keeping current dir")
                 documentFileTreeUri = null
-                val fallback = File(appContext.filesDir, DOWNLOAD_DIR).apply { mkdirs() }
-                downloadDir = fallback
+                // DL-EXTERNAL-ONLY: НЕ откатываемся на internal. Оставляем текущий downloadDir.
                 refreshFromDisk()
                 return
             }
@@ -171,9 +170,9 @@ object VideoDownloadManager {
         newDir.mkdirs()
         // Fix #123: probe-write — canWrite() ненадёжён на Scoped Storage.
         if (!newDir.exists() || !newDir.canWrite() || !probeWritable(newDir)) {
-            AppLog.e(TAG, "reconfigurePath: target dir not writable: ${newDir.absolutePath} — falling back to internal")
-            val fallback = File(appContext.filesDir, DOWNLOAD_DIR).apply { mkdirs() }
-            if (fallback.canWrite()) downloadDir = fallback
+            AppLog.e(TAG, "reconfigurePath: target dir not writable: ${newDir.absolutePath} — keeping previous dir")
+            // DL-EXTERNAL-ONLY: НЕ откатываемся на internal. Оставляем текущий
+            // downloadDir. UI покажет баннер «Папка недоступна».
             refreshFromDisk()
             return
         }
@@ -266,7 +265,10 @@ object VideoDownloadManager {
             if (initialized) return
 
             appContext = context.applicationContext
-            downloadDir = File(appContext.filesDir, DOWNLOAD_DIR).apply { mkdirs() }
+            // DL-EXTERNAL-ONLY: дефолтный путь СРАЗУ в /Movies/PinoK/ (external).
+            // Internal storage (filesDir/video_downloads) больше НЕ используем
+            // как fallback — пользователь не видит эти файлы в проводнике.
+            downloadDir = resolveVideoDir("/Movies/PinoK/").apply { mkdirs() }
 
             val ua = VkUserAgent.get(context.applicationContext as android.app.Application)
             httpClient = OkHttpClient.Builder()

@@ -374,6 +374,9 @@ fun FeedScreen(
             cacheCustomPath = "",
             musicDownloadPath = "/Music/PinoK/",
             videoDownloadPath = "/Movies/PinoK/",
+            // DL-EXTERNAL-ONLY: stories + clips пишем в external подпапки Movies/PinoK.
+            storyVideoDownloadPath = "/Movies/PinoK/Stories/",
+            clipDownloadPath = "/Movies/PinoK/Clips/",
             musicHighQuality = true,
             musicBackgroundPlay = true,
             // #OFFLINE-TAB: audioFormat добавлен в Snapshot — FeedScreen тоже

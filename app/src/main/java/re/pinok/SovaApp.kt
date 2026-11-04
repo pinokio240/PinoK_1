@@ -1673,6 +1673,17 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         .onFailure { e -> AppLog.w("SovaApp", "video path reconfigure failed: ${e.message}") }
                     AppLog.i("SovaApp", "Saved video download path applied: ${snap.videoDownloadPath}")
                 }
+                // DL-EXTERNAL-ONLY: stories + clips — применяем сохранённый путь при старте.
+                if (snap.storyVideoDownloadPath.isNotBlank()) {
+                    runCatching { StoryVideoDownloadManager.reconfigurePath(snap.storyVideoDownloadPath) }
+                        .onFailure { e -> AppLog.w("SovaApp", "story video path reconfigure failed: ${e.message}") }
+                    AppLog.i("SovaApp", "Saved story video download path applied: ${snap.storyVideoDownloadPath}")
+                }
+                if (snap.clipDownloadPath.isNotBlank()) {
+                    runCatching { ClipVideoDownloadManager.reconfigurePath(snap.clipDownloadPath) }
+                        .onFailure { e -> AppLog.w("SovaApp", "clip path reconfigure failed: ${e.message}") }
+                    AppLog.i("SovaApp", "Saved clip download path applied: ${snap.clipDownloadPath}")
+                }
             } catch (e: Exception) {
                 AppLog.w("SovaApp", "Failed to load prefs", e)
             }

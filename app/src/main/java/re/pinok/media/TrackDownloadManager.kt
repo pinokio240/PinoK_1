@@ -303,14 +303,14 @@ object TrackDownloadManager {
                 refreshFromDisk()
                 return
             } else {
-                AppLog.w(TAG, "reconfigurePath: SD-карта URI not accessible — $treeUri, falling back to internal")
+                AppLog.w(TAG, "reconfigurePath: SD-карта URI not accessible — $treeUri, keeping current dir")
                 documentFileTreeUri = null
-                val fallback = File(appContext.filesDir, DOWNLOAD_DIR).apply { mkdirs() }
-                downloadDir = fallback
+                // DL-EXTERNAL-ONLY: НЕ откатываемся на internal. Оставляем текущий
+                // downloadDir (предыдущий путь), устанавливаем mismatch.
                 _pathMismatch.value = PathMismatchInfo(
                     savedPath = newPath,
                     effectivePath = downloadDir.absolutePath,
-                    reason = "SD-карта недоступна. Файлы сохраняются во внутреннюю память.",
+                    reason = "SD-карта недоступна. Файлы сохраняются в прежнюю папку.",
                 )
                 refreshFromDisk()
                 return
@@ -326,13 +326,10 @@ object TrackDownloadManager {
         // (возвращает true для /storage/emulated/0/Music, но реальная запись EPERM).
         // Делаем probe-запись: создаём временный файл и удаляем. Только потом переносим.
         if (!newDir.exists() || !newDir.canWrite() || !probeWritable(newDir)) {
-            AppLog.e(TAG, "reconfigurePath: target dir not writable: ${newDir.absolutePath} — falling back to internal")
-            val fallback = File(appContext.filesDir, DOWNLOAD_DIR).apply { mkdirs() }
-            if (fallback.canWrite()) {
-                downloadDir = fallback
-                AppLog.i(TAG, "reconfigurePath: using fallback internal dir=${fallback.absolutePath}")
-            }
-            // Fix #147: устанавливаем mismatch — UI покажет banner.
+            AppLog.e(TAG, "reconfigurePath: target dir not writable: ${newDir.absolutePath} — keeping previous dir")
+            // DL-EXTERNAL-ONLY: НЕ откатываемся на internal. Оставляем текущий
+            // downloadDir, устанавливаем mismatch — UI покажет баннер с кнопкой
+            // «Доступ ко всем файлам» (MANAGE_EXTERNAL_STORAGE на Android 11+).
             _pathMismatch.value = PathMismatchInfo(
                 savedPath = newPath.ifBlank { "(default)" },
                 effectivePath = downloadDir.absolutePath,
@@ -532,8 +529,13 @@ object TrackDownloadManager {
 
             appContext = context.applicationContext
 
-            // Дефолтный путь сразу (без I/O) — main не блокируется.
-            downloadDir = File(appContext.filesDir, DOWNLOAD_DIR).apply { mkdirs() }
+            // DL-EXTERNAL-ONLY: дефолтный путь СРАЗУ в /Music/PinoK/ (external).
+            // Internal storage (filesDir/downloads/music) больше НЕ используем
+            // как fallback — пользователь не видит эти файлы в проводнике.
+            // Если external недоступен (Android 11+ без MANAGE_EXTERNAL_STORAGE)
+            // — mkdirs() молча fail, enqueueDownload завершится FAILED с
+            // понятной причиной. UI покажет баннер «Папка недоступна».
+            downloadDir = resolveDownloadDir("/Music/PinoK/").apply { mkdirs() }
 
             val ua = VkUserAgent.get(context.applicationContext as android.app.Application)
             httpClient = OkHttpClient.Builder()

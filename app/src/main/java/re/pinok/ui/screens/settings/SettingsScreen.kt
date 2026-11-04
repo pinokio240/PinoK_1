@@ -3845,6 +3845,36 @@ private fun VideoTab(
                 defaultFolder = "Movies/PinoK",
             )
         }
+        // DL-EXTERNAL-ONLY: пути для stories и clips — отдельные PathSettingRow,
+        // чтобы пользователь мог их настраивать как у видео/аудио.
+        item {
+            PathSettingRow(
+                label = "Папка для скачанных историй",
+                currentPath = s.storyVideoDownloadPath,
+                onPathChange = { newPath ->
+                    scope.launch {
+                        app.prefs.setStoryVideoDownloadPath(newPath)
+                        re.pinok.media.StoryVideoDownloadManager.reconfigurePath(newPath)
+                    }
+                },
+                context = context,
+                defaultFolder = "Movies/PinoK/Stories",
+            )
+        }
+        item {
+            PathSettingRow(
+                label = "Папка для скачанных клипов",
+                currentPath = s.clipDownloadPath,
+                onPathChange = { newPath ->
+                    scope.launch {
+                        app.prefs.setClipDownloadPath(newPath)
+                        re.pinok.media.ClipVideoDownloadManager.reconfigurePath(newPath)
+                    }
+                },
+                context = context,
+                defaultFolder = "Movies/PinoK/Clips",
+            )
+        }
 
         item { SectionHeader("Скачанные видео") }
         item { VideoDownloadsCard(context) }

@@ -2,6 +2,7 @@
 package re.pinok.media
 
 import android.content.Context
+import android.os.Environment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -99,13 +100,12 @@ object StoryVideoDownloadManager {
     /** Сменить директорию скачивания (переносит файлы). Mirror [VideoDownloadManager.reconfigurePath]. */
     fun reconfigurePath(newPath: String) {
         if (!initialized) return
-        val newDir = if (newPath.isNotBlank()) File(newPath) else File(appContext.filesDir, DOWNLOAD_DIR)
+        val newDir = resolveStoryDir(newPath)
         newDir.mkdirs()
         // Fix #123: probe-write + try/catch на перенос (Scoped Storage EPERM guard).
         if (!newDir.exists() || !newDir.canWrite() || !probeWritable(newDir)) {
-            AppLog.e(TAG, "reconfigurePath: target dir not writable: ${newDir.absolutePath} — falling back to internal")
-            val fallback = File(appContext.filesDir, DOWNLOAD_DIR).apply { mkdirs() }
-            if (fallback.canWrite()) downloadDir = fallback
+            AppLog.e(TAG, "reconfigurePath: target dir not writable: ${newDir.absolutePath} — keeping previous dir")
+            // DL-EXTERNAL-ONLY: НЕ откатываемся на internal. Оставляем текущий downloadDir.
             refreshFromDisk()
             return
         }
@@ -145,13 +145,46 @@ object StoryVideoDownloadManager {
         }
     }
 
+    /**
+     * DL-EXTERNAL-ONLY: Нормализует путь скачивания stories. Mirror
+     * [VideoDownloadManager.resolveVideoDir] / [TrackDownloadManager.resolveDownloadDir].
+     *
+     * Поддерживаемые форматы:
+     *  - "" (blank) → /storage/emulated/0/Movies/PinoK/Stories (default).
+     *  - "/Movies/PinoK/Stories/" → relative к external storage.
+     *  - "/storage/emulated/0/..." (абсолютный external) → как есть.
+     *  - "content://..." SAF tree URI → fallback на default external
+     *    (SAF для stories не поддерживается, см. DocumentFileStorage).
+     */
+    private fun resolveStoryDir(rawPath: String): File {
+        if (rawPath.isBlank()) {
+            return File(Environment.getExternalStorageDirectory(), "Movies/PinoK/Stories")
+        }
+        val path = rawPath.trim().trimEnd('/')
+        if (path.startsWith("/storage/") || path.startsWith("/data/") ||
+            path.startsWith("/sdcard/") || path.startsWith("/mnt/")) {
+            return File(path)
+        }
+        // content:// SAF URI — не поддерживаем для stories (нет DocumentFile
+        // интеграции в этом менеджере). Используем default external.
+        if (path.startsWith("content://")) {
+            AppLog.w(TAG, "resolveStoryDir: SAF URI not supported for stories, using default")
+            return File(Environment.getExternalStorageDirectory(), "Movies/PinoK/Stories")
+        }
+        // Relative-путь (например «Movies/PinoK/Stories») → от external storage.
+        val relPath = path.removePrefix("/")
+        return File(Environment.getExternalStorageDirectory(), relPath)
+    }
+
     fun init(context: Context) {
         if (initialized) return
         synchronized(this) {
             if (initialized) return
 
             appContext = context.applicationContext
-            downloadDir = File(appContext.filesDir, DOWNLOAD_DIR).apply { mkdirs() }
+            // DL-EXTERNAL-ONLY: дефолтный путь СРАЗУ в /Movies/PinoK/Stories/ (external).
+            // Internal storage (filesDir/story_video_downloads) больше НЕ используем.
+            downloadDir = resolveStoryDir("/Movies/PinoK/Stories/").apply { mkdirs() }
 
             val ua = VkUserAgent.get(context.applicationContext as android.app.Application)
             httpClient = OkHttpClient.Builder()

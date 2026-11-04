@@ -355,6 +355,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // Music
             musicDownloadPath  = p[Keys.MUSIC_DOWNLOAD_PATH]   ?: "/Music/PinoK/",
             videoDownloadPath  = p[Keys.VIDEO_DOWNLOAD_PATH]   ?: "/Movies/PinoK/",
+            // DL-EXTERNAL-ONLY: stories и clips тоже пишем в external по умолчанию.
+            // Подпапки в /Movies/PinoK/ чтобы не смешивались с полноразмерными видео.
+            storyVideoDownloadPath = p[Keys.STORY_VIDEO_DOWNLOAD_PATH] ?: "/Movies/PinoK/Stories/",
+            clipDownloadPath   = p[Keys.CLIP_DOWNLOAD_PATH]    ?: "/Movies/PinoK/Clips/",
             musicHighQuality   = p[Keys.MUSIC_HQ]              ?: true,
             musicHqOnMobile    = p[Keys.MUSIC_HQ_MOBILE]       ?: true,
             musicBackgroundPlay= p[Keys.MUSIC_BG_PLAY]         ?: true,
@@ -1007,6 +1011,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
     suspend fun setMusicDownloadPath(v: String)          = put(Keys.MUSIC_DOWNLOAD_PATH, v)
     suspend fun setVideoDownloadPath(v: String)          = put(Keys.VIDEO_DOWNLOAD_PATH, v)
+    /** DL-EXTERNAL-ONLY: сеттер пути скачивания видео-историй. */
+    suspend fun setStoryVideoDownloadPath(v: String)    = put(Keys.STORY_VIDEO_DOWNLOAD_PATH, v)
+    /** DL-EXTERNAL-ONLY: сеттер пути скачивания clips. */
+    suspend fun setClipDownloadPath(v: String)           = put(Keys.CLIP_DOWNLOAD_PATH, v)
     suspend fun setMusicHighQuality(v: Boolean)          = put(Keys.MUSIC_HQ, v)
     /** #AUD-NET: разрешение HQ на мобильной сети. */
     suspend fun setMusicHqOnMobile(v: Boolean)           = put(Keys.MUSIC_HQ_MOBILE, v)
@@ -1728,6 +1736,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Music
         val musicDownloadPath: String,
         val videoDownloadPath: String,
+        /** DL-EXTERNAL-ONLY: путь скачивания видео-историй (default /Movies/PinoK/Stories/). */
+        val storyVideoDownloadPath: String = "/Movies/PinoK/Stories/",
+        /** DL-EXTERNAL-ONLY: путь скачивания clips (default /Movies/PinoK/Clips/). */
+        val clipDownloadPath: String = "/Movies/PinoK/Clips/",
         val musicHighQuality: Boolean,
         /** #AUD-NET: HQ (quality=hq) на мобильной сети. Default false. */
         val musicHqOnMobile: Boolean = true,
@@ -2296,6 +2308,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         // Music
         val MUSIC_DOWNLOAD_PATH = stringPreferencesKey("music_download_path")
         val VIDEO_DOWNLOAD_PATH = stringPreferencesKey("video_download_path")
+        /** DL-EXTERNAL-ONLY: путь скачивания видео-историй (default "/Movies/PinoK/Stories/"). */
+        val STORY_VIDEO_DOWNLOAD_PATH = stringPreferencesKey("story_video_download_path")
+        /** DL-EXTERNAL-ONLY: путь скачивания clips (default "/Movies/PinoK/Clips/"). */
+        val CLIP_DOWNLOAD_PATH  = stringPreferencesKey("clip_download_path")
         val MUSIC_HQ            = booleanPreferencesKey("music_hq")
         /** #AUD-NET: HQ на мобильной сети (default false). */
         val MUSIC_HQ_MOBILE     = booleanPreferencesKey("music_hq_mobile")

@@ -2,6 +2,7 @@
 package re.pinok.media
 
 import android.content.Context
+import android.os.Environment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -119,13 +120,96 @@ object ClipVideoDownloadManager {
      */
     fun clipKey(ownerId: Long, videoId: Long): String = "c_${ownerId}_${videoId}"
 
+    /**
+     * DL-EXTERNAL-ONLY: Сменить директорию скачивания clips (переносит файлы).
+     * Mirror [VideoDownloadManager.reconfigurePath] / [StoryVideoDownloadManager.reconfigurePath].
+     *
+     * Поддерживаемые форматы пути см. в [resolveClipDir]. Internal storage
+     * больше НЕ используется как fallback — если целевая папка недоступна для
+     * записи, оставляем текущий downloadDir (без отката на filesDir).
+     */
+    fun reconfigurePath(newPath: String) {
+        if (!initialized) return
+        val newDir = resolveClipDir(newPath)
+        newDir.mkdirs()
+        if (!newDir.exists() || !newDir.canWrite() || !probeWritable(newDir)) {
+            AppLog.e(TAG, "reconfigurePath: target dir not writable: ${newDir.absolutePath} — keeping previous dir")
+            // DL-EXTERNAL-ONLY: НЕ откатываемся на internal. Оставляем текущий downloadDir.
+            refreshFromDisk()
+            return
+        }
+        if (newDir.absolutePath == downloadDir.absolutePath) return
+        val previousDir = downloadDir
+        try {
+            downloadDir.listFiles()?.forEach { file ->
+                file.copyTo(File(newDir, file.name), overwrite = true)
+                file.delete()
+            }
+            downloadDir = newDir
+            AppLog.i(TAG, "reconfigurePath: dir=${downloadDir.absolutePath}")
+        } catch (e: Exception) {
+            AppLog.e(TAG, "reconfigurePath: copy failed (${e.javaClass.simpleName}: ${e.message}) — keeping previous dir=${previousDir.absolutePath}", e)
+            downloadDir = previousDir
+            runCatching {
+                downloadDir.listFiles()?.forEach { src ->
+                    val dst = File(newDir, src.name)
+                    if (dst.exists() && src.exists()) dst.delete()
+                }
+            }
+        }
+        refreshFromDisk()
+    }
+
+    /** Fix #123: probe-write для надёжной проверки Scoped Storage. */
+    private fun probeWritable(dir: File): Boolean {
+        val probe = File(dir, ".pinok_probe_${System.currentTimeMillis()}")
+        return try {
+            FileOutputStream(probe).use { it.write(0) }
+            probe.delete()
+            true
+        } catch (e: Exception) {
+            AppLog.w(TAG, "probeWritable: write test FAILED for ${dir.absolutePath}: ${e.javaClass.simpleName}: ${e.message}")
+            probe.delete()
+            false
+        }
+    }
+
+    /**
+     * DL-EXTERNAL-ONLY: Нормализует путь скачивания clips. Mirror
+     * [VideoDownloadManager.resolveVideoDir] / [StoryVideoDownloadManager.resolveStoryDir].
+     *
+     * Поддерживаемые форматы:
+     *  - "" (blank) → /storage/emulated/0/Movies/PinoK/Clips (default).
+     *  - "/Movies/PinoK/Clips/" → relative к external storage.
+     *  - "/storage/emulated/0/..." (абсолютный external) → как есть.
+     *  - "content://..." SAF tree URI → fallback на default external.
+     */
+    private fun resolveClipDir(rawPath: String): File {
+        if (rawPath.isBlank()) {
+            return File(Environment.getExternalStorageDirectory(), "Movies/PinoK/Clips")
+        }
+        val path = rawPath.trim().trimEnd('/')
+        if (path.startsWith("/storage/") || path.startsWith("/data/") ||
+            path.startsWith("/sdcard/") || path.startsWith("/mnt/")) {
+            return File(path)
+        }
+        if (path.startsWith("content://")) {
+            AppLog.w(TAG, "resolveClipDir: SAF URI not supported for clips, using default")
+            return File(Environment.getExternalStorageDirectory(), "Movies/PinoK/Clips")
+        }
+        val relPath = path.removePrefix("/")
+        return File(Environment.getExternalStorageDirectory(), relPath)
+    }
+
     fun init(context: Context) {
         if (initialized) return
         synchronized(this) {
             if (initialized) return
 
             appContext = context.applicationContext
-            downloadDir = File(appContext.filesDir, DOWNLOAD_DIR).apply { mkdirs() }
+            // DL-EXTERNAL-ONLY: дефолтный путь СРАЗУ в /Movies/PinoK/Clips/ (external).
+            // Internal storage (filesDir/clip_downloads) больше НЕ используем.
+            downloadDir = resolveClipDir("/Movies/PinoK/Clips/").apply { mkdirs() }
 
             val ua = VkUserAgent.get(context.applicationContext as android.app.Application)
             httpClient = OkHttpClient.Builder()
