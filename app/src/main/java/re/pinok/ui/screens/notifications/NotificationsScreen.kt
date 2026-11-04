@@ -1247,22 +1247,16 @@ private fun NotificationCard(
     val context = LocalContext.current
     val linkColor = MaterialTheme.colorScheme.primary
 
-    // VK-WEB-CARD: разделение на header (имя автора) и displayText (глагол без имени).
+    // VK-WEB-CARD: header/text — ОТДЕЛЬНЫЕ поля от VK redesign API (по реальному HAR).
     // VK web: data-testid="notification-header" = имя, data-testid="notification-text" = глагол.
-    // PinoK: item.text содержит полный текст с именем в начале («Имя оценил ваш комментарий»).
-    // Для single profile — отрезаем имя из начала text. Для multi/нет profile — text как есть.
+    // Прежний код отрезал prefix вручную (хрупко) — теперь парсер хранит их раздельно.
+    // Fallback: если header пуст (legacy/парсинг сломан) — из feedbackProfiles.
     val profiles = item.feedbackProfiles
     val singleProfile = if (profiles.size == 1) profiles.first() else null
-    val header: String = if (singleProfile != null) {
-        singleProfile.name
-    } else {
-        ""
+    val header: String = item.header.ifBlank {
+        singleProfile?.name ?: ""
     }
-    val displayText: String = if (header.isNotBlank() && item.text.startsWith(header)) {
-        item.text.removePrefix(header).trimStart()
-    } else {
-        item.text
-    }
+    val displayText: String = item.text
 
     // #NOTIF-DEEPLINK (2026-10-02): клик по карточке → существующий движок
     // VkUrlDeepLinker.deepLinkFor(item) строит точный target (пост с commentId,

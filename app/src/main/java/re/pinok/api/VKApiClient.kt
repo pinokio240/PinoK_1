@@ -10405,6 +10405,12 @@ class VKApiClient(
          * (пусто, если вложения нет или оно не bubble).
          */
         val bubbleText: String = "",
+        /**
+         * VK-WEB-CARD: имя автора уведомления (верхнеуровневое поле `header`
+         * из notifications.getRedesign). VK web рендерит его отдельной строкой
+         * (data-testid="notification-header"), а text — как глагол без имени.
+         */
+        val header: String = "",
     ) {
         /**
          * Уникальный ключ для key={} и distinctBy.
@@ -19667,43 +19673,52 @@ class VKApiClient(
             if (entityEl != null && entityEl.isJsonObject) {
                 val entity = entityEl.asJsonObject
                 parentType = entity.get("type")?.asString ?: ""
-                parentOwnerId = entity.get("owner_id")?.asLong ?: 0L
-                // FIX-NOTIF §2: extraction entity.id (= comment_id для comment-сущности)
-                // ВЫНЕСЕН ДО цепочки parentItemId и сохраняется отдельно. Раньше fallback-
-                // цепочка parentItemId = post_id?:photo_id?:video_id?:topic_id?:entity.id
-                // при отсутствии post_id у comment-сущности клала comment_id в parentItemId
-                // → OpenPost(owner, comment_id, comment_id) открывал несуществующий пост
-                // wall{owner}_{comment_id}?reply={comment_id}. Теперь parentItemId БЕЗ
-                // entity.id (= 0L при отсутствии post_id → fallbackDeepLink безопасно
-                // открывает Notifications), а parentCommentId заполняется ВСЕГДА
-                // (= commentId) — навигация скроллит к комментарию через parentCommentId.
-                val commentId = entity.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
-                // post_id / photo_id / video_id / topic_id — разные имена для разных типов.
-                // БЕЗ entity.id в конце: не падаем в comment_id, когда VK не прислал post_id.
-                parentItemId = entity.get("post_id")?.asLong
-                    ?: entity.get("photo_id")?.asLong
-                    ?: entity.get("video_id")?.asLong
-                    ?: entity.get("topic_id")?.asLong
-                    ?: 0L
-                parentText = entity.get("attachments_string")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                // VK-WEB-CARD: текст комментария может быть в entity.text/body (для like_comment).
-                // Если attachments_string пустой — пробуем text/body как fallback.
-                if (parentText.isBlank()) {
-                    parentText = entity.get("text")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                }
-                if (parentText.isBlank()) {
-                    parentText = entity.get("body")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                }
-                // §42.4 #PUSH-DEEPLINK: entity.url — канонический VK permalink
-                // (например «https://vk.com/wall-123_456?reply=789»). Надёжнее
-                // чем type+post_id, т.к. однозначно кодирует comment_id (?reply=).
                 parentUrl = entity.get("url")?.takeIf { !it.isJsonNull }?.asString
-                // §42.4 #PUSH-DEEPLINK: id комментария — к нему скроллим в PostDetailScreen.
-                // FIX-NOTIF §2: заполняем parentCommentId = commentId ВСЕГДА (раньше
-                // только при parentType=="comment"). Для НЕ-comment-сущностей VK шлёт
-                // post_id/photo_id/video_id/topic_id, но не id → commentId=0L → безопасно.
-                // Для comment-сущностей commentId = entity.id = comment_id → корректный скролл.
-                parentCommentId = commentId
+
+                // ─── VK-WEB-CARD: вложенная entity (по реальному HAR VK redesign) ───
+                // Pattern A (comment): entity.type="comment" → entity.entity={
+                //   {type:"post"|"short_video"|"photo"|"video", owner_id, post_id|short_video_id|...},
+                //   comment_id (в entity, НЕ в entity.entity),
+                //   url с ?reply=
+                // }
+                // Pattern B (post): entity.type="post" → плоская структура
+                //   {type:"post", owner_id, post_id, url, attachments_string}
+                val nestedEntityEl = entity.get("entity")
+                if (parentType == "comment" && nestedEntityEl != null && nestedEntityEl.isJsonObject) {
+                    // ─── Pattern A: comment на объект → entity.entity = родительский объект ───
+                    val nested = nestedEntityEl.asJsonObject
+                    val nestedType = nested.get("type")?.asString ?: ""
+                    val nestedOwnerId = nested.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                    // id объекта: post_id | short_video_id | photo_id | video_id | topic_id
+                    val nestedItemId = nested.get("post_id")?.asLong
+                        ?: nested.get("short_video_id")?.asLong
+                        ?: nested.get("photo_id")?.asLong
+                        ?: nested.get("video_id")?.asLong
+                        ?: nested.get("topic_id")?.asLong
+                        ?: 0L
+                    // comment_id — ПРЯМО в entity (не entity.id!)
+                    val commentId = entity.get("comment_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                    // parent = родительский объект (пост/клип/фото), где лежит комментарий
+                    parentType = nestedType
+                    parentOwnerId = nestedOwnerId
+                    parentItemId = nestedItemId
+                    parentCommentId = commentId
+                    // parentUrl = entity.url с ?reply= (полный permalink)
+                    if (parentUrl.isNullOrBlank()) {
+                        parentUrl = nested.get("url")?.takeIf { !it.isJsonNull }?.asString
+                    }
+                } else {
+                    // ─── Pattern B: плоская entity (post/photo/video/topic) ───
+                    parentOwnerId = entity.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                    parentItemId = entity.get("post_id")?.asLong
+                        ?: entity.get("photo_id")?.asLong
+                        ?: entity.get("video_id")?.asLong
+                        ?: entity.get("topic_id")?.asLong
+                        ?: entity.get("short_video_id")?.asLong
+                        ?: 0L
+                    parentCommentId = entity.get("comment_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                    parentText = entity.get("attachments_string")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                }
             }
             // action.type = "entity_show" — это тип ДЕЙСТВИЯ (что будет при клике),
             // не тип уведомления. Для actions кнопок не используем — в redesign
@@ -19976,12 +19991,22 @@ class VKApiClient(
             val am = attachmentMain.asJsonObject
             attachmentType = am.get("type")?.takeIf { !it.isJsonNull }?.asString ?: ""
             attachmentsString = am.get("attachments_string")?.takeIf { !it.isJsonNull }?.asString ?: ""
-            val bubbleEl = am.get("bubble")
-            if (bubbleEl != null && bubbleEl.isJsonObject) {
-                bubbleText = bubbleEl.asJsonObject
-                    .get("main_text")?.takeIf { !it.isJsonNull }?.asString
-                    ?: bubbleEl.asJsonObject.get("text")?.takeIf { !it.isJsonNull }?.asString
-                    ?: ""
+            // ─── VK-WEB-CARD (по реальному HAR VK redesign) ───
+            // Pattern A (comment): attachment = {type:"bubble", main_text:"...", entity:{...}}
+            //   main_text — ПРЯМО в attachment (НЕ вложено в attachment.bubble!).
+            //   additional_text — доп. подпись («Стикер»).
+            // Прежний парсер искал attachment.bubble.main_text — всегда пусто →
+            // текст комментария не показывался. Теперь читаем attachment.main_text.
+            bubbleText = am.get("main_text")?.takeIf { !it.isJsonNull }?.asString ?: ""
+            if (bubbleText.isBlank()) {
+                // Legacy-структура (если VK вернёт вложенную) — fallback.
+                val bubbleEl = am.get("bubble")
+                if (bubbleEl != null && bubbleEl.isJsonObject) {
+                    bubbleText = bubbleEl.asJsonObject
+                        .get("main_text")?.takeIf { !it.isJsonNull }?.asString
+                        ?: bubbleEl.asJsonObject.get("text")?.takeIf { !it.isJsonNull }?.asString
+                        ?: ""
+                }
             }
         }
         // entity_array: attachments_string живёт внутри первого item'а.
@@ -20036,7 +20061,11 @@ class VKApiClient(
             profilesMap = profilesMap,
             parentCommentId = parentCommentId,
             parentUrl = parentUrl,
-            text = displayText,
+            // VK-WEB-CARD: header/text — отдельные поля VK redesign (по реальному HAR).
+            // Прежний код склеивал "$header $text" → потом UI отрезал prefix. Хрупко.
+            // Теперь header хранится отдельно, text = глагол без имени.
+            header = header,
+            text = actionText,
             parentId = parentItemId,
             parentOwnerIdLegacy = parentOwnerId,
             rawId = redesignId,
