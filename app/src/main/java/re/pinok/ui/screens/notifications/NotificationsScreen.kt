@@ -1337,10 +1337,11 @@ private fun NotificationCard(
         } else {
             null
         }
+        // VK-WEB-CARD: аватар 40dp (как в VK web — не 48dp).
         Box(
             modifier = Modifier
                 .padding(top = 2.dp)
-                .size(48.dp)
+                .size(40.dp)
                 .clip(CircleShape)
                 .background(if (avatarUrl != null) MaterialTheme.colorScheme.surfaceVariant else typeIcon.bgTint)
                 .clickable(onClick = clickProfile),
@@ -1350,24 +1351,22 @@ private fun NotificationCard(
                 AsyncImage(
                     model = avatarUrl,
                     contentDescription = singleProfile.name,
-                    modifier = Modifier.size(48.dp).clip(CircleShape),
+                    modifier = Modifier.size(40.dp).clip(CircleShape),
                 )
             } else {
                 Icon(
                     typeIcon.icon,
                     contentDescription = item.type,
                     tint = typeIcon.tint,
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(20.dp),
                 )
             }
             // Малый бейдж типа в правом нижнем углу (поверх аватара).
-            // VK web показывает аналогичный значок: иконка действия (лайк/коммент/пост)
-            // поверх аватара отправителя, чтобы было видно ЧТО сделал пользователь.
             if (avatarUrl != null) {
                 Box(
                     modifier = Modifier
-                        .offset(x = 28.dp, y = 28.dp)
-                        .size(20.dp)
+                        .offset(x = 22.dp, y = 22.dp)
+                        .size(18.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.surface)
                         .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, CircleShape),
@@ -1377,13 +1376,13 @@ private fun NotificationCard(
                         typeIcon.icon,
                         contentDescription = null,
                         tint = typeIcon.tint,
-                        modifier = Modifier.size(12.dp),
+                        modifier = Modifier.size(11.dp),
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(10.dp))
 
         // ─── Контент ───
         Column(modifier = Modifier.weight(1f)) {
@@ -1502,15 +1501,14 @@ private fun NotificationCard(
                 }
             }
 
-            // VK-WEB-CARD: header (имя автора, bold accent) — отдельная строка, КЛИКАБЕЛЬНАЯ.
-            // Клик по имени → профиль отправителя (как в VK web).
-            // Клик по остальной карточке → к комментарию/посту (navigate).
+            // VK-WEB-CARD: header (имя автора, bold) — отдельная строка, КЛИКАБЕЛЬНАЯ.
+            // VK web: имя БЕЛОЕ (onSurface), не синее. Клик → профиль.
             if (header.isNotBlank()) {
                 Text(
                     text = header,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
