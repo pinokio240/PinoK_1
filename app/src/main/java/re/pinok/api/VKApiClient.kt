@@ -19621,6 +19621,14 @@ class VKApiClient(
                     ?: entity.get("topic_id")?.asLong
                     ?: 0L
                 parentText = entity.get("attachments_string")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                // VK-WEB-CARD: текст комментария может быть в entity.text/body (для like_comment).
+                // Если attachments_string пустой — пробуем text/body как fallback.
+                if (parentText.isBlank()) {
+                    parentText = entity.get("text")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                }
+                if (parentText.isBlank()) {
+                    parentText = entity.get("body")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                }
                 // §42.4 #PUSH-DEEPLINK: entity.url — канонический VK permalink
                 // (например «https://vk.com/wall-123_456?reply=789»). Надёжнее
                 // чем type+post_id, т.к. однозначно кодирует comment_id (?reply=).

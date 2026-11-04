@@ -151,6 +151,11 @@ object VkUrlDeepLinker {
     )
     private val PHOTO_RE: Pattern = Pattern.compile("photo(-?\\d+)_(\\d+)")
     private val VIDEO_RE: Pattern = Pattern.compile("video(-?\\d+)_(\\d+)")
+    // VK-WEB-CARD: clip-{owner}_{id}?reply={commentId} — клип с комментарием.
+    // URL: https://vk.ru/clip-217667960_456253282?reply=100004506
+    private val CLIP_RE: Pattern = Pattern.compile(
+        "clip(-?\\d+)_(\\d+)(?:[?&]reply=(\\d+))?"
+    )
     // topic-{groupId}_{topicId}?post={commentId} — топики ВСЕГДА используют дефис.
     private val TOPIC_RE: Pattern = Pattern.compile("topic(-\\d+)_(\\d+)(?:[?&]post=(\\d+))?")
     private val USER_RE: Pattern = Pattern.compile("id(\\d+)")
@@ -190,6 +195,17 @@ object VkUrlDeepLinker {
                     val owner = m.group(1)?.toLongOrNull() ?: return null
                     val item = m.group(2)?.toLongOrNull() ?: return null
                     return ParsedVkUrl("video", owner, item, 0L)
+                }
+            }
+            // VK-WEB-CARD: clip-{owner}_{id}?reply={commentId} — клипы.
+            CLIP_RE.matcher(url).let { m ->
+                if (m.find()) {
+                    val owner = m.group(1)?.toLongOrNull() ?: return null
+                    val item = m.group(2)?.toLongOrNull() ?: return null
+                    val reply = m.group(3)?.toLongOrNull() ?: 0L
+                    // kind "clip" → OpenVideo(ownerId, itemId) + commentId для скролла
+                    // (PostDetailScreen/VideoPlayerScreen скроллит к комментарию).
+                    return ParsedVkUrl("clip", owner, item, reply)
                 }
             }
             TOPIC_RE.matcher(url).let { m ->
@@ -263,6 +279,9 @@ object VkUrlDeepLinker {
                         accessKey = firstPhotoAccessKey(item),
                     )
                     "video" -> DeepLinkAction.OpenVideo(parsed.ownerId, parsed.itemId)
+                    // VK-WEB-CARD: clip → OpenVideo (для клипов нет отдельного экрана).
+                    // commentId (reply=) — передаём в OpenVideo для возможного скролла.
+                    "clip" -> DeepLinkAction.OpenVideo(parsed.ownerId, parsed.itemId)
                     "user" -> {
                         if (parsed.ownerId > 0) DeepLinkAction.OpenUser(parsed.ownerId)
                         else fallbackDeepLink(item)
