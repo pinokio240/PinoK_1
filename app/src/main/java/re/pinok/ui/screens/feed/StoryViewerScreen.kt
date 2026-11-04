@@ -1159,30 +1159,32 @@ fun StoryViewerScreen(
         // StoryVideo (duration) — они НЕ влияют на UI шторки.
         if (showStoryDownloadSheet) {
             val qs = qualityStory
-            if (qs != null && qs.video != null) {
-                val sv = qs.video!!
-                val sheetVideo = Video(
-                    id = qs.id.toLong(),
-                    ownerId = qs.ownerId,
-                    title = "",
-                    duration = sv.duration,
-                    date = 0L,
-                    files = sv.files,
-                )
-                VideoDownloadSheet(
-                    video = sheetVideo,
-                    onDismiss = { showStoryDownloadSheet = false },
-                    title = "Скачать историю",
-                    onPick = { fileKey ->
-                        StoryVideoDownloadManager.enqueueDownload(
-                            story = qs,
-                            fileKey = fileKey,
-                            ownerName = currentGroup.name ?: "",
-                            ownerPhoto100 = currentGroup.photo100,
-                            silent = false,
-                        )
-                    },
-                )
+            if (qs != null) {
+                val sv = qs.video
+                if (sv != null) {
+                    val sheetVideo = Video(
+                        id = qs.id.toLong(),
+                        ownerId = qs.ownerId,
+                        title = "",
+                        duration = sv.duration,
+                        date = 0L,
+                        files = sv.files,
+                    )
+                    VideoDownloadSheet(
+                        video = sheetVideo,
+                        onDismiss = { showStoryDownloadSheet = false },
+                        title = "Скачать историю",
+                        onPick = { fileKey ->
+                            StoryVideoDownloadManager.enqueueDownload(
+                                story = qs,
+                                fileKey = fileKey,
+                                ownerName = currentGroup.name ?: "",
+                                ownerPhoto100 = currentGroup.photo100,
+                                silent = false,
+                            )
+                        },
+                    )
+                }
             }
         }
     }

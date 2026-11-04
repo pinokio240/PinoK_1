@@ -4201,12 +4201,15 @@ private fun buildVideoDownloadOptions(files: Map<String, String>?): List<VideoDo
     }
     val hlsKey = HLS_FILE_KEYS.firstOrNull { !files[it].isNullOrBlank() }
     if (hlsKey != null) {
-        options += VideoDownloadOption(
-            fileKey = hlsKey,
-            kind = VideoDownloadOption.Kind.HLS,
-            label = if (hlsKey == "hls_fmp4") "HLS fMP4 (поток)" else "HLS (поток)",
-            url = files[hlsKey]!!,
-        )
+        val hlsUrl = files[hlsKey]
+        if (hlsUrl != null) {
+            options += VideoDownloadOption(
+                fileKey = hlsKey,
+                kind = VideoDownloadOption.Kind.HLS,
+                label = if (hlsKey == "hls_fmp4") "HLS fMP4 (поток)" else "HLS (поток)",
+                url = hlsUrl,
+            )
+        }
     }
     return options
 }
@@ -4314,7 +4317,13 @@ fun VideoDownloadSheet(
                 items(options, key = { it.fileKey }) { opt ->
                     val subtitle = when (opt.kind) {
                         VideoDownloadOption.Kind.HLS -> "сборка в один файл"
-                        VideoDownloadOption.Kind.MP4 -> fmtBytes(sizeByKey[opt.fileKey] ?: 0L) ?: "—"
+                        VideoDownloadOption.Kind.MP4 -> {
+                            val size = sizeByKey[opt.fileKey]
+                            when {
+                                size != null && size > 0L -> fmtBytes(size) ?: "—"
+                                else -> "—"
+                            }
+                        }
                     }
                     Row(
                         modifier = Modifier
