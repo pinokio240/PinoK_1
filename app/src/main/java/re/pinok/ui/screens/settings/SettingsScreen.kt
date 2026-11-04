@@ -2663,6 +2663,23 @@ private fun MusicTab(
         item { SectionHeader("Качество MP3") }
         item { QualityRow(current = s.audioQuality) { q -> scope.launch { app.prefs.setAudioQuality(q) } } }
 
+        // ── Путь сохранения (дублировано из вкладки Офлайн — польз. ищет тут) ──
+        item { SectionHeader("Путь сохранения") }
+        item {
+            PathSettingRow(
+                label = "Папка для скачанных аудио",
+                currentPath = s.musicDownloadPath,
+                onPathChange = { newPath ->
+                    scope.launch {
+                        app.prefs.setMusicDownloadPath(newPath)
+                        re.pinok.media.TrackDownloadManager.reconfigurePath(newPath)
+                    }
+                },
+                context = context,
+                defaultFolder = "Music/PinoK",
+            )
+        }
+
         // #AUTOLOAD-BACK: секция «Авто-загрузка» возвращена во вкладку Музыка.
         // Раньше (#AUTO-CACHE-MOVE) тумблер убирали, считая что «Загрузить всё»
         // из вкладки Офлайн покрывает все сценарии. Но авто-загрузка решает
@@ -2797,6 +2814,22 @@ private fun OfflineTab(
                 },
                 context = context,
                 defaultFolder = "Music/PinoK",
+            )
+        }
+        // Видео-путь дублирован из вкладки Видео — пользователь ищет все пути
+        // сохранения в одном месте (запрос пользователя 2026-11-04).
+        item {
+            PathSettingRow(
+                label = "Папка для скачанных видео",
+                currentPath = s.videoDownloadPath,
+                onPathChange = { newPath ->
+                    scope.launch {
+                        app.prefs.setVideoDownloadPath(newPath)
+                        re.pinok.media.VideoDownloadManager.reconfigurePath(newPath)
+                    }
+                },
+                context = context,
+                defaultFolder = "Movies/PinoK",
             )
         }
 
