@@ -1339,8 +1339,16 @@ private fun AudioOfflineRow(
                 },
                 onClick = {
                     showLocationMenu = false
-                    openFileLocation(context, file, TrackDownloadManager.getDownloadDir())
+                    openFileLocation(context, file, TrackDownloadManager.effectiveDownloadDir)
                 },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun VideoOfflineRow(
     state: re.pinok.data.model.DownloadState,
     fileSize: Long,
     file: File?,
