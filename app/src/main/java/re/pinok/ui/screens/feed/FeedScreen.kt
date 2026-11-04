@@ -373,7 +373,7 @@ fun FeedScreen(
             cacheSizeMb = 0L,
             cacheCustomPath = "",
             musicDownloadPath = "/Music/PinoK/",
-            videoDownloadPath = "",
+            videoDownloadPath = "/Movies/PinoK/",
             musicHighQuality = true,
             musicBackgroundPlay = true,
             // #OFFLINE-TAB: audioFormat добавлен в Snapshot — FeedScreen тоже

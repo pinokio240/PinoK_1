@@ -2796,6 +2796,7 @@ private fun OfflineTab(
                     }
                 },
                 context = context,
+                defaultFolder = "Music/PinoK",
             )
         }
 
@@ -3808,6 +3809,7 @@ private fun VideoTab(
                     }
                 },
                 context = context,
+                defaultFolder = "Movies/PinoK",
             )
         }
 
@@ -7129,6 +7131,7 @@ private fun PathSettingRow(
     currentPath: String,
     onPathChange: (String) -> Unit,
     context: android.content.Context,
+    defaultFolder: String = "Music/PinoK",
 ) {
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree(),
@@ -7201,7 +7204,7 @@ private fun PathSettingRow(
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = "Для записи в /Music/PinoK нужен доступ ко всем файлам",
+                        text = "Для записи в /$defaultFolder нужен доступ ко всем файлам",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )

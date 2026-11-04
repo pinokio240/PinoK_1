@@ -354,7 +354,7 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
 
             // Music
             musicDownloadPath  = p[Keys.MUSIC_DOWNLOAD_PATH]   ?: "/Music/PinoK/",
-            videoDownloadPath  = p[Keys.VIDEO_DOWNLOAD_PATH]   ?: "",
+            videoDownloadPath  = p[Keys.VIDEO_DOWNLOAD_PATH]   ?: "/Movies/PinoK/",
             musicHighQuality   = p[Keys.MUSIC_HQ]              ?: true,
             musicHqOnMobile    = p[Keys.MUSIC_HQ_MOBILE]       ?: true,
             musicBackgroundPlay= p[Keys.MUSIC_BG_PLAY]         ?: true,

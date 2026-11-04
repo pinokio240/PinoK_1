@@ -1658,7 +1658,9 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                 // reconfigurePath переносит файлы, на main нельзя).
                 // Музыка: дефолт SovaPrefs «/Music/PinoK/» НЕ применяем — иначе дефолтным
                 // пользователям внутренний filesDir-режим неожиданно сменится на external
-                // (поведенческое изменение вне фикс-семантики). Видео: дефолт — пустая строка.
+                // (поведенческое изменение вне фикс-семантики). Видео: дефолт —
+                // «/Movies/PinoK/» (системная папка Movies/подпапка PinoK) — применяется
+                // при старте, reconfigurePath переносит существующие файлы.
                 if (snap.musicDownloadPath.isNotBlank() &&
                     snap.musicDownloadPath != "/Music/PinoK/" // дефолт SovaPrefs MUSIC_DOWNLOAD_PATH
                 ) {
