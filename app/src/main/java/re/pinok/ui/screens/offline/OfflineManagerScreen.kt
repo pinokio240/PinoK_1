@@ -2215,58 +2215,73 @@ private fun openFileLocation(context: Context, file: File?, fallbackFolder: File
             "com.android.externalstorage.documents",
             documentId,
         )
-        // DL-LOCATION-FIX3: ЯВНО указываем DocumentsUI — иначе ACTION_VIEW
-        // без data может открыть произвольное приложение (галерею/браузер/...)
-        // или упасть с ActivityNotFoundException. Перебираем известные package
-        // names системного Files на разных прошивках: AOSP, Google, MIUI,
-        // OneUI, Huawei. Первый найденный запускаем.
-        val documentsUiPackages = listOf(
-            "com.android.documentsui",         // AOSP / Google
-            "com.google.android.documentsui",  // Google Play Edition
-            "com.mi.android.globalFileexplorer", // MIUI
-            "com.android.filemanager",         // некоторые Samsung
-            "com.huawei.hidisk",               // Huawei EMUI
-        )
-        var opened = false
-        for (pkg in documentsUiPackages) {
-            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
-                }
-                setPackage(pkg)
+
+        // ── DL-LOCATION-FIX5: правильный способ открыть Files на папке ──
+        // DocumentsUI НЕ имеет ACTION_VIEW intent-filter! Прежний подход с
+        // ACTION_VIEW + setPackage возвращал null из resolveActivity — код
+        // молча падал в Toast, пользователь видел только путь.
+        //
+        // ACTION_MAIN + CATEGORY_APP_FILES — стандартный запуск Files app
+        // (DocumentsUI.LauncherActivity на Android 10+). EXTRA_INITIAL_URI
+        // в intent — LauncherActivity читает его и открывает Files на
+        // указанной папке (uses its OWN system permissions, no PinoK grant needed).
+        //
+        // На Android 7-9 (API 24-28) CATEGORY_APP_FILES игнорируется — fallback
+        // на ACTION_VIEW + FileProvider URI + chooser (ниже).
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val filesIntent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_APP_FILES)
+                putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            if (viewIntent.resolveActivity(context.packageManager) != null) {
+            if (filesIntent.resolveActivity(context.packageManager) != null) {
                 try {
-                    context.startActivity(viewIntent)
-                    AppLog.i(TAG, "openFileLocation: opened $pkg at $folderPath via EXTRA_INITIAL_URI")
-                    opened = true
-                    break
+                    context.startActivity(filesIntent)
+                    AppLog.i(TAG, "openFileLocation: opened Files at $folderPath via CATEGORY_APP_FILES + EXTRA_INITIAL_URI")
+                    return
                 } catch (e: ActivityNotFoundException) {
-                    AppLog.w(TAG, "openFileLocation: $pkg not available")
+                    AppLog.w(TAG, "openFileLocation: CATEGORY_APP_FILES failed: ${e.message}")
                 } catch (e: SecurityException) {
-                    AppLog.w(TAG, "openFileLocation: SecurityException on $pkg: ${e.message}")
+                    AppLog.w(TAG, "openFileLocation: SecurityException: ${e.message}")
                 }
+            } else {
+                AppLog.w(TAG, "openFileLocation: no Files app for CATEGORY_APP_FILES")
             }
         }
-        if (opened) {
+
+        // ── Fallback: FileProvider + ACTION_VIEW + resource/folder + chooser ──
+        // Работает на Android 7-9 (где нет CATEGORY_APP_FILES), а также если
+        // на Android 10+ системный Files не принял EXTRA_INITIAL_URI.
+        // FileProvider URI передаём как data + FLAG_GRANT_READ_URI_PERMISSION —
+        // PinoK имеет права на свои FileProvider URI, грантится получателю.
+        val authority = "${context.packageName}.fileprovider"
+        val folderUri = try {
+            FileProvider.getUriForFile(context, authority, folder)
+        } catch (e: IllegalArgumentException) {
+            AppLog.w(TAG, "openFileLocation: FileProvider cannot share ${folder.absolutePath}: ${e.message}")
+            // Last resort: Toast с путём.
+            Toast.makeText(
+                context,
+                "Папка:\n$folderPath",
+                Toast.LENGTH_LONG,
+            ).show()
             return
         }
-        // Fallback: ACTION_VIEW без package — пусть система выберет проводник.
-        val fallbackIntent = Intent(Intent.ACTION_VIEW).apply {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
-            }
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(folderUri, "resource/folder")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val chooser = Intent.createChooser(viewIntent, "Открыть папку").apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         try {
-            context.startActivity(fallbackIntent)
-            AppLog.i(TAG, "openFileLocation: opened default viewer at $folderPath (fallback)")
+            context.startActivity(chooser)
+            AppLog.i(TAG, "openFileLocation: opened folder via chooser (resource/folder): $folderPath")
             return
         } catch (e: ActivityNotFoundException) {
-            AppLog.w(TAG, "openFileLocation: no Files app, trying chooser fallback")
+            AppLog.w(TAG, "openFileLocation: no file manager for resource/folder")
         } catch (e: SecurityException) {
-            AppLog.w(TAG, "openFileLocation: SecurityException on fallback: ${e.message}")
+            AppLog.w(TAG, "openFileLocation: SecurityException on chooser: ${e.message}")
         }
     }
 
