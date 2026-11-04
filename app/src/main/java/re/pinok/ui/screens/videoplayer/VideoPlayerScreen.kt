@@ -4314,7 +4314,7 @@ fun VideoDownloadSheet(
                 items(options, key = { it.fileKey }) { opt ->
                     val subtitle = when (opt.kind) {
                         VideoDownloadOption.Kind.HLS -> "сборка в один файл"
-                        VideoDownloadOption.Kind.MP4 -> fmtBytes(sizeByKey[opt.fileKey]) ?: "—"
+                        VideoDownloadOption.Kind.MP4 -> fmtBytes(sizeByKey[opt.fileKey] ?: 0L) ?: "—"
                     }
                     Row(
                         modifier = Modifier
