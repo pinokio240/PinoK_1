@@ -1268,12 +1268,15 @@ private fun NotificationCard(
             action !is re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenNotifications
         if (handledByDeepLink && onDeepLink != null) {
             onDeepLink(action)
-        } else if (onUserClick != null && item.feedbackIds.isNotEmpty()) {
-            AppLog.w("NotifNav", "fallback to onUserClick (deepLink gave OpenNotifications)")
-            onUserClick(item.feedbackIds.first())
         } else if (onPostClick != null && item.parentOwnerId != 0L && item.parentItemId != 0L) {
+            // VK-WEB-CARD: fallback на пост (НЕ на профиль — профиль открывается
+            // только кликом по имени/header). Если parentOwnerId/ItemId=0 —
+            // ничего не делаем (лучше чем переход в профиль по клику на карточку).
             onPostClick(item.parentOwnerId, item.parentItemId)
         }
+        // Если deepLink не сработал и нет parent post — НЕ fallback на onUserClick.
+        // Пользователь ждал переход к комментарию, а не в профиль отправителя.
+        // Профиль открывается отдельным кликом по header (имени автора).
     }
 
     Row(
@@ -1456,15 +1459,25 @@ private fun NotificationCard(
                 }
             }
 
-            // VK-WEB-CARD: header (имя автора, bold accent) — отдельная строка.
+            // VK-WEB-CARD: header (имя автора, bold accent) — отдельная строка, КЛИКАБЕЛЬНАЯ.
+            // Клик по имени → профиль отправителя (как в VK web).
+            // Клик по остальной карточке → к комментарию/посту (navigate).
             if (header.isNotBlank()) {
+                val clickProfile: () -> Unit = {
+                    if (onUserClick != null && item.feedbackIds.isNotEmpty()) {
+                        onUserClick(item.feedbackIds.first())
+                    }
+                }
                 Text(
                     text = header,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = MaterialTheme.colorScheme.primary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .clickable(onClick = clickProfile)
+                        .padding(vertical = 2.dp),
                 )
             }
 
