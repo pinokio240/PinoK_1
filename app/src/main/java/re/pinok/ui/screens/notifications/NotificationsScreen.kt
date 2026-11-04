@@ -1552,8 +1552,31 @@ private fun NotificationCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            // VK-WEB-CARD: bubbleText больше НЕ отдельным блоком — теперь overlay
-            // поверх превью вложения (см. AttachmentThumb с bubbleText параметром).
+            // VK-WEB-CARD: bubbleText — отдельным блоком когда НЕТ attachments
+            // (overlay только для превью). Если attachments есть — bubbleText рендерится
+            // как overlay на превью (см. AttachmentThumb ниже).
+            if (item.bubbleText.isNotBlank() && item.attachments.isEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        text = linkifyVkText(
+                            item.bubbleText,
+                            linkColor,
+                            onUrlClick = { url -> openUrlExternal(context, url) },
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
 
             // #NOTIF-NFDCAT: пред-кнопки (buttons.primary/secondary) — рендер ПОД
             // текстом уведомления (как VK web). Клик дефолтно открывает parent/
