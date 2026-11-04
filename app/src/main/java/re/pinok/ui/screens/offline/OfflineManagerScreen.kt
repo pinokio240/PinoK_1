@@ -2206,10 +2206,43 @@ private fun openFileLocation(context: Context, file: File?, fallbackFolder: File
     val isPrimaryExternal = folderPath == externalRoot ||
         folderPath.startsWith(externalRoot + "/")
     if (isPrimaryExternal) {
-        // DL-LOCATION-FIX7: FileProvider + ACTION_VIEW + resource/folder.
-        // ВАЖНО: нужен <queries> в AndroidManifest для mime "resource/folder"
-        // и "vnd.android.document/directory" — иначе на Android 11+ (API 30+)
-        // resolveActivity() вернёт null (package visibility restrictions).
+        // DL-LOCATION-FIX8: DocumentsContract URI + EXTRA_INITIAL_URI.
+        //
+        // Прежний FileProvider URI (FIX6/FIX7) открывал Files, но НЕ на папке
+        // PinoK — Files не понимает FileProvider URI как путь к папке, открывает
+        // свой стандартный UI (Recent / корень).
+        //
+        // DocumentsContract URI (content://com.android.externalstorage.documents/
+        // document/primary:Movies/PinoK) Files понимает и открывает именно эту
+        // папку. ВАЖНО: НЕ добавляем FLAG_GRANT_READ_URI_PERMISSION — для
+        // DocumentsProvider URI это требует persistent permission от PinoK
+        // (которого нет) → SecurityException. Без этого флага DocumentsUI
+        // использует свои системные права для чтения.
+        val relative = folderPath.removePrefix(externalRoot).removePrefix("/")
+        val documentId = if (relative.isEmpty()) "primary:" else "primary:$relative"
+        val docsUri = DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents",
+            documentId,
+        )
+        // Попытка 1: ACTION_VIEW + vnd.android.document/directory + EXTRA_INITIAL_URI.
+        // БЕЗ FLAG_GRANT_READ_URI_PERMISSION (важно!).
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(docsUri, "vnd.android.document/directory")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                putExtra(DocumentsContract.EXTRA_INITIAL_URI, docsUri)
+            }
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(viewIntent)
+            AppLog.i(TAG, "openFileLocation: opened Files at $folderPath via DocumentsContract + EXTRA_INITIAL_URI")
+            return
+        } catch (e: ActivityNotFoundException) {
+            AppLog.w(TAG, "openFileLocation: no Files handler: ${e.message}")
+        } catch (e: SecurityException) {
+            AppLog.w(TAG, "openFileLocation: SecurityException (no FLAG_GRANT): ${e.message}")
+        }
+        // Попытка 2: FileProvider + resource/folder (если DocumentsUI недоступен).
         val authority = "${context.packageName}.fileprovider"
         val folderUri = try {
             FileProvider.getUriForFile(context, authority, folder)
@@ -2222,32 +2255,18 @@ private fun openFileLocation(context: Context, file: File?, fallbackFolder: File
             ).show()
             return
         }
-        // Попытка 1: ACTION_VIEW + resource/folder ( mime-type папки).
-        var success = tryStartActivity(context, folderUri, "resource/folder")
-        if (success) {
-            AppLog.i(TAG, "openFileLocation: opened folder via resource/folder: $folderPath")
-            return
-        }
-        // Попытка 2: ACTION_VIEW + vnd.android.document/directory (альтернативный mime).
-        success = tryStartActivity(context, folderUri, "vnd.android.document/directory")
-        if (success) {
-            AppLog.i(TAG, "openFileLocation: opened folder via vnd.android.document/directory: $folderPath")
-            return
-        }
-        // Попытка 3: chooser — пусть пользователь выберет приложение сам.
-        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+        val fpIntent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(folderUri, "resource/folder")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        val chooser = Intent.createChooser(viewIntent, "Открыть папку").apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
         try {
-            context.startActivity(chooser)
-            AppLog.i(TAG, "openFileLocation: opened folder via chooser: $folderPath")
+            context.startActivity(fpIntent)
+            AppLog.i(TAG, "openFileLocation: opened via FileProvider resource/folder: $folderPath")
             return
         } catch (e: ActivityNotFoundException) {
-            AppLog.w(TAG, "openFileLocation: no file manager at all: ${e.message}")
+            AppLog.w(TAG, "openFileLocation: no resource/folder handler")
+        } catch (e: SecurityException) {
+            AppLog.w(TAG, "openFileLocation: SecurityException on resource/folder: ${e.message}")
         }
     }
 
