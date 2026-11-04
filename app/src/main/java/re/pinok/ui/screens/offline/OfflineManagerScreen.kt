@@ -2206,60 +2206,15 @@ private fun openFileLocation(context: Context, file: File?, fallbackFolder: File
     val isPrimaryExternal = folderPath == externalRoot ||
         folderPath.startsWith(externalRoot + "/")
     if (isPrimaryExternal) {
-        // relative к externalRoot: «Movies/PinoK» или «Music/PinoK».
-        val relative = folderPath.removePrefix(externalRoot).removePrefix("/")
-        // documentId в формате «primary:<relative path>» — стандарт для
-        // com.android.externalstorage.documents.
-        val documentId = if (relative.isEmpty()) "primary:" else "primary:$relative"
-        val initialUri = DocumentsContract.buildDocumentUri(
-            "com.android.externalstorage.documents",
-            documentId,
-        )
-
-        // ── DL-LOCATION-FIX5: правильный способ открыть Files на папке ──
-        // DocumentsUI НЕ имеет ACTION_VIEW intent-filter! Прежний подход с
-        // ACTION_VIEW + setPackage возвращал null из resolveActivity — код
-        // молча падал в Toast, пользователь видел только путь.
-        //
-        // ACTION_MAIN + CATEGORY_APP_FILES — стандартный запуск Files app
-        // (DocumentsUI.LauncherActivity на Android 10+). EXTRA_INITIAL_URI
-        // в intent — LauncherActivity читает его и открывает Files на
-        // указанной папке (uses its OWN system permissions, no PinoK grant needed).
-        //
-        // На Android 7-9 (API 24-28) CATEGORY_APP_FILES игнорируется — fallback
-        // на ACTION_VIEW + FileProvider URI + chooser (ниже).
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            val filesIntent = Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_APP_FILES)
-                putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            if (filesIntent.resolveActivity(context.packageManager) != null) {
-                try {
-                    context.startActivity(filesIntent)
-                    AppLog.i(TAG, "openFileLocation: opened Files at $folderPath via CATEGORY_APP_FILES + EXTRA_INITIAL_URI")
-                    return
-                } catch (e: ActivityNotFoundException) {
-                    AppLog.w(TAG, "openFileLocation: CATEGORY_APP_FILES failed: ${e.message}")
-                } catch (e: SecurityException) {
-                    AppLog.w(TAG, "openFileLocation: SecurityException: ${e.message}")
-                }
-            } else {
-                AppLog.w(TAG, "openFileLocation: no Files app for CATEGORY_APP_FILES")
-            }
-        }
-
-        // ── Fallback: FileProvider + ACTION_VIEW + resource/folder + chooser ──
-        // Работает на Android 7-9 (где нет CATEGORY_APP_FILES), а также если
-        // на Android 10+ системный Files не принял EXTRA_INITIAL_URI.
-        // FileProvider URI передаём как data + FLAG_GRANT_READ_URI_PERMISSION —
-        // PinoK имеет права на свои FileProvider URI, грантится получателю.
+        // DL-LOCATION-FIX6: FileProvider + ACTION_VIEW + resource/folder + chooser.
+        // PinoK имеет права на свои FileProvider URI, FLAG_GRANT_READ_URI_PERMISSION
+        // грантит URI получателю. resource/folder — mime-type папки, поддерживается
+        // большинством проводников (Solid Explorer, Cx Проводник, FX, Total Commander).
         val authority = "${context.packageName}.fileprovider"
         val folderUri = try {
             FileProvider.getUriForFile(context, authority, folder)
         } catch (e: IllegalArgumentException) {
             AppLog.w(TAG, "openFileLocation: FileProvider cannot share ${folder.absolutePath}: ${e.message}")
-            // Last resort: Toast с путём.
             Toast.makeText(
                 context,
                 "Папка:\n$folderPath",
