@@ -20008,6 +20008,70 @@ class VKApiClient(
                         ?: ""
                 }
             }
+            // ─── VK-WEB-CARD (HAR-SNAP-FIX): preview для bubble-вложения ───
+            // VK web рендерит bubbleText ПОВЕРХ превью клипа/видео/фото. Парсер
+            // уже собрал top-level превью в mediaThumbs (ключи "video:oId_id"/
+            // "clip:oId_id"/"photo:oId_id"/"post:oId_id"). Для like_comment
+            // attachment.entity — это comment-entity с nested entity.entity
+            // (родительский объект: short_video/post/photo/video). Извлекаем
+            // nested entity и регистрируем ПРЕВЬЮ в attachments[], чтобы UI
+            // отрисовал LazyRow + AttachmentThumb с bubbleText overlay (точно
+            // как VK web — см. архив /home/z/vk-snap/har_notif0_full.json).
+            //
+            // Доказательство из HAR (entry[0] response.notifications):
+            //   attachment = {type:"bubble", main_text:"Учителя способные...",
+            //     entity:{type:"comment",
+            //       entity:{type:"short_video", owner_id:-217667960, short_video_id:456253282},
+            //       comment_id:100004506, url:"...?reply=100004506"}}
+            //   response.videos[0] = {id:456253282, owner_id:-217667960, type:"short_video",
+            //     image:[{url:"https://iv.okcdn.ru/getVideoPreview?..."}]}
+            //   → mediaThumbs["video:-217667960_456253282"] = image[0].url
+            if (attachmentType.equals("bubble", ignoreCase = true) && attachments.isEmpty()) {
+                val bubbleEntityEl = am.get("entity")
+                if (bubbleEntityEl != null && bubbleEntityEl.isJsonObject) {
+                    val bubbleEntity = bubbleEntityEl.asJsonObject
+                    val nestedEl = bubbleEntity.get("entity")
+                    if (nestedEl != null && nestedEl.isJsonObject) {
+                        val nested = nestedEl.asJsonObject
+                        val nestedType = nested.get("type")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                        val nestedOwnerId = nested.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                        // id поля: short_video_id | post_id | photo_id | video_id | topic_id | id
+                        // (VK использует разные имена id в зависимости от типа сущности)
+                        val nestedItemId = nested.get("short_video_id")?.takeIf { !it.isJsonNull }?.asLong
+                            ?: nested.get("post_id")?.takeIf { !it.isJsonNull }?.asLong
+                            ?: nested.get("photo_id")?.takeIf { !it.isJsonNull }?.asLong
+                            ?: nested.get("video_id")?.takeIf { !it.isJsonNull }?.asLong
+                            ?: nested.get("topic_id")?.takeIf { !it.isJsonNull }?.asLong
+                            ?: nested.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                            ?: 0L
+                        if (nestedOwnerId != 0L && nestedItemId != 0L) {
+                            // VK кладёт short_video в response.videos[] (НЕ в response.clips[]!) —
+                            // поэтому lookup по ключу "video:oId_id". Пробуем альтернативные
+                            // ключи для устойчивости (на случай если VK изменит контейнер).
+                            val thumbUrl = mediaThumbs["video:${nestedOwnerId}_$nestedItemId"]
+                                ?: mediaThumbs["clip:${nestedOwnerId}_$nestedItemId"]
+                                ?: mediaThumbs["post:${nestedOwnerId}_$nestedItemId"]
+                                ?: mediaThumbs["photo:${nestedOwnerId}_$nestedItemId"]
+                            // Тип для NotificationAttachment (для play-иконки + клик-обработчика):
+                            // short_video → "clip" (UI показывает play-иконку + клик открывает видео)
+                            val attType = when (nestedType) {
+                                "short_video" -> "clip"
+                                "video" -> "video"
+                                "photo" -> "photo"
+                                "post", "wall" -> "photo"
+                                else -> "video"
+                            }
+                            attachments.add(NotificationAttachment(
+                                type = attType,
+                                thumbUrl = thumbUrl ?: "",
+                                ownerId = nestedOwnerId,
+                                itemId = nestedItemId,
+                                accessKey = null,
+                            ))
+                        }
+                    }
+                }
+            }
         }
         // entity_array: attachments_string живёт внутри первого item'а.
         if (attachmentsString.isBlank()) {

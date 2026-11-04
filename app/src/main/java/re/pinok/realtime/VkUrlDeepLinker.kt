@@ -414,7 +414,17 @@ object VkUrlDeepLinker {
                 accessKey = firstPhotoAccessKey(item),
             )
             "video" -> DeepLinkAction.OpenVideo(ownerId, itemId)
-            "clip" -> DeepLinkAction.OpenVideo(ownerId, itemId)
+            // VK-WEB-CARD (HAR-SNAP-FIX): short_video — это клип (clip). VK redesign
+            // отдаёт action.entity.entity.type="short_video" для like_comment на клип
+            // (см. архив /home/z/vk-snap/har_notif0_full.json). Раньше fallback не
+            // обрабатывал "short_video" → уходил в else → OpenNotifications (клик по
+            // карточке ничего не открывал, если parentUrl был пуст). Теперь короткий
+            // путь к OpenVideo + commentId для скролла к комментарию.
+            "short_video", "clip" -> DeepLinkAction.OpenVideo(
+                ownerId = ownerId,
+                videoId = itemId,
+                commentId = item.parentCommentId,
+            )
             "topic" -> DeepLinkAction.OpenPost(ownerId, itemId, item.parentCommentId)
             else -> {
                 AppLog.d(TAG, "fallback: unknown parentType='$parentType' type=$type → OpenNotifications")

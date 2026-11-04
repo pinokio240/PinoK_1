@@ -1693,7 +1693,15 @@ private fun NotificationCard(
                             attachment = att,
                             bubbleText = item.bubbleText,
                             onClick = {
-                                if (att.type == "video" || att.type == "clip") {
+                                // VK-WEB-CARD (HAR-SNAP-FIX): для bubble-вложения (like_comment)
+                                // клик по превью открывает ТОТ ЖЕ target что и клик по карточке
+                                // (clip с commentId через deepLink), а НЕ onPostClick —
+                                // onPostClick ожидает wall-post (ownerId, postId), а для bubble
+                                // att.itemId это video_id/short_video_id, не post_id.
+                                // Без этой проверки клик уводил в профиль или несуществующий пост.
+                                if (item.attachmentType.equals("bubble", ignoreCase = true)) {
+                                    navigate()
+                                } else if (att.type == "video" || att.type == "clip") {
                                     // Видео/клип — открываем через onPostClick с owner/id
                                     if (onPostClick != null && att.ownerId != 0L && att.itemId != 0L) {
                                         onPostClick(att.ownerId, att.itemId)
