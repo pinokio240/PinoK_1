@@ -122,6 +122,9 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -138,7 +141,6 @@ import re.pinok.ui.theme.UiScale
 import re.pinok.util.AppLog
 import re.pinok.util.linkifyVkText
 import re.pinok.util.openUrlExternal
-import re.pinok.util.toRelativeTime
 
 // P1.6 (DIAG-C2 §5): локальный тип-фильтр уведомлений (NOTIFICATION_FILTERS +
 // NotificationFilter data class + NotificationFilterSheet bottom-sheet + activeFilter
@@ -1219,6 +1221,19 @@ private fun NotificationCardSwipeable(
 // Notification Card (N2: иконки, N3: аватары, N4: превью, N7: действия)
 // ═══════════════════════════════════════════════════════════
 
+/** #NOTIF-FULL-DATE (2026-11-05): полная дата+время «дд.ММ.гггг ЧЧ:мм»
+ * (например «05.11.2026 21:05») вместо относительного времени.
+ * [tsSec] — Unix timestamp в СЕКУНДАХ (item.date, то же, что toRelativeTime:
+ * System.currentTimeMillis()/1000 - this → Date(this*1000)). */
+private fun formatFullDateTime(tsSec: Long): String {
+    return try {
+        SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
+            .format(Date(tsSec * 1000L))
+    } catch (_: Exception) {
+        ""
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 private fun NotificationCard(
@@ -1291,6 +1306,13 @@ private fun NotificationCard(
         // Профиль открывается отдельным кликом по header (имени автора).
     }
 
+    // #NOTIF-SNAP-CARD (2026-11-05): клип-карточка (like_comment/reply на short_video).
+    // VK web присылает parentType="short_video" (чаще) или "clip". Для неё:
+    //  • НЕ показываем parentText-сниппет (у клипа его нет — ролик, не пост);
+    //  • превью рендерим ВЕРТИКАЛЬНЫМ 72×120 (см. AttachmentThumb).
+    val isClip = item.parentType.equals("short_video", ignoreCase = true) ||
+        item.parentType.equals("clip", ignoreCase = true)
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1315,9 +1337,22 @@ private fun NotificationCard(
         //  1. Аватар → профиль отправителя (как в VK web — data-testid="notification-avatar")
         //  2. Имя автора (header) → профиль отправителя
         //  3. Текст/вложения → к комментарию/посту/вложению (navigate)
+        // #NOTIF-CLICK-PARTS (2026-11-05): клик по имени/аватару отправителя.
+        // VK API конвенция: id профиля-пользователя положительный, группа —
+        // ОТРИЦАТЕЛЬНАЯ (-ownerId). Пользователь → профиль (onUserClick),
+        // группа → сообщество через onDeepLink(OpenCommunity) (колбэка
+        // onOpenCommunity в сигнатуре нет — переиспользуем onDeepLink).
+        val firstFeedbackId: Long = item.feedbackIds.firstOrNull() ?: 0L
         val clickProfile: () -> Unit = {
-            if (onUserClick != null && item.feedbackIds.isNotEmpty()) {
-                onUserClick(item.feedbackIds.first())
+            if (item.feedbackIds.isNotEmpty()) {
+                val fid = firstFeedbackId
+                if (fid < 0) {
+                    if (onDeepLink != null) {
+                        onDeepLink(re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenCommunity(-fid))
+                    }
+                } else if (onUserClick != null) {
+                    onUserClick(fid)
+                }
             }
         }
         val avatarUrl: String? = if (singleProfile != null) {
@@ -1380,12 +1415,41 @@ private fun NotificationCard(
 
         // ─── Контент ───
         Column(modifier = Modifier.weight(1f)) {
-            // VK-WEB-CARD: строка заголовка — время + NEW-бейдж + меню ⋮ (справа).
+            // #NOTIF-UNIFORM-CARD (2026-11-05): СТРОКА 1 в одну линию —
+            // [имя (weight 1f, клик → профиль)] + [NEW-бейдж][время][⋮-меню].
+            // Раньше имя было отдельным Text ниже, а время+⋮ — строкой выше;
+            // по единому паттерну карточки теперь всё на одной строке:
+            // имя слева (рядом с аватаром), время и ⋮-контекст-меню справа.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.End,
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                // #NOTIF-FULL-DATE (2026-11-05): слева в Строке 1 — вертикальный
+                // блок «имя сверху, под ним дата+время» (weight 1f); справа —
+                // NEW-бейдж (если есть) + ⋮-меню (время убрано из правой части).
+                Column(modifier = Modifier.weight(1f)) {
+                    if (header.isNotBlank()) {
+                        Text(
+                            text = header,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            // #NOTIF-CLICK-PARTS: имя автора кликабельно → профиль.
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(onClick = clickProfile),
+                        )
+                    }
+                    // #NOTIF-FULL-DATE (2026-11-05): полная дата под именем.
+                    // item.date — Unix timestamp в секундах → *1000 для Date.
+                    Text(
+                        text = formatFullDateTime(item.date),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
                 // VK-WEB-CARD: per-card NEW-бейдж (data-testid="notification-viewed-badge"
                 // в VK web — синяя точка для непрочитанных). item.date >= lastViewed = новое.
                 val isNew = if (lastViewed != null && lastViewed > 0L) {
@@ -1401,11 +1465,6 @@ private fun NotificationCard(
                             .background(MaterialTheme.colorScheme.primary, CircleShape),
                     )
                 }
-                Text(
-                    text = item.date.toRelativeTime(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                )
                 Box {
                     IconButton(
                         onClick = { showContextMenu = true },
@@ -1495,21 +1554,9 @@ private fun NotificationCard(
                 }
             }
 
-            // VK-WEB-CARD: header (имя автора, bold accent) — отдельная строка, КЛИКАБЕЛЬНАЯ.
-            // Цветовая тема PinoK сохранена (primary/accent). Клик → профиль.
-            if (header.isNotBlank()) {
-                Text(
-                    text = header,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .clickable(onClick = clickProfile)
-                        .padding(vertical = 2.dp),
-                )
-            }
+            // #NOTIF-UNIFORM-CARD (2026-11-05): небольшой отступ между строкой
+            // заголовка и текстом уведомления (имя больше не несёт vertical padding).
+            Spacer(modifier = Modifier.height(2.dp))
 
             // VK-WEB-CARD: текст уведомления (глагол без имени, как в VK web).
             if (displayText.isNotBlank()) {
@@ -1526,64 +1573,9 @@ private fun NotificationCard(
                 )
             }
 
-            // Превью текста родительского поста.
-            // NOTIF-FIX-1 (Task 3): убрано `&& item.type != "wall"` — раньше превью
-            // текста СКРЫВАЛОСЬ для wall/new_posts уведомлений, и карточка выглядела
-            // пустой (только «опубликовало новый пост», без контекста ЧТО опубликовано).
-            // По скриншоту VK web — превью текста показывается для ВСЕХ типов, включая
-            // новые посты (аниме-название, детали эпизода и т.д.). maxLines увеличен
-            // с 2 до 3 — VK web показывает до 3 строк превью.
-            if (item.parentText.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = linkifyVkText(
-                        item.parentText,
-                        linkColor,
-                        onUrlClick = { url -> openUrlExternal(context, url) },
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-
-            // Превью ответа (reply_comment)
-            if (item.replyText.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        item.profilesMap[item.replyFromId]?.let { replyProfile ->
-                            Text(
-                                text = replyProfile.name,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.primary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Text(
-                            text = linkifyVkText(
-                                item.replyText,
-                                linkColor,
-                                onUrlClick = { url -> openUrlExternal(context, url) },
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-
+            // #NOTIF-UNIFORM-CARD (2026-11-05): вложения/миниатюры ПОДНЯТЫ из низа
+            // карточки сюда (перед сниппетом поста) — единый паттерн: [строка1] →
+            // глагол → миниатюры → сниппет поста → текст комментария.
             // ─── #NOTIF-NFDCAT: attachment (entity_array / bubble / static_image) ───
             // • entity_array → attachments_string («Видео/Фото/4 фото/3 вложения»);
             // • bubble → текст комментария-пузыря (main_text);
@@ -1601,6 +1593,146 @@ private fun NotificationCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            // #NOTIF-SNAP-CARD (2026-11-05): порядок блоков приведён к снапшоту VK web:
+            // header → text → parentText (сниппет/подпись вложений) → attachments → reply/bubble.
+            // VK web рендерит вложения (LazyRow/превью) ПОСЛЕ post-text, а не до него
+            // (раньше LazyRow стоял над сниппетом — несоответствие снапшоту).
+
+            // Превью текста родительского поста.
+            // NOTIF-FIX-1 (Task 3): убрано `&& item.type != "wall"` — раньше превью
+            // текста СКРЫВАЛОСЬ для wall/new_posts уведомлений, и карточка выглядела
+            // пустой (только «опубликовало новый пост», без контекста ЧТО опубликовано).
+            // По скриншоту VK web — превью текста показывается для ВСЕХ типов, включая
+            // новые посты (аниме-название, детали эпизода и т.д.). maxLines увеличен
+            // с 2 до 3 — VK web показывает до 3 строк превью.
+            // #NOTIF-SNAP-CARD (2026-11-05): для клип-карточек (short_video/clip) сниппет
+            // НЕ показываем — у короткого ролика нет post-text в снапшоте VK web
+            // (тело карточки: вертикальное превью + main_text в бабле, БЕЗ parentText).
+            if (item.parentText.isNotBlank() && !isClip) {
+                Spacer(Modifier.height(4.dp))
+                // #NOTIF-CLICK-PARTS (2026-11-05): превью поста (parentText) — явный
+                // кликабельный блок → переход НА САМ ПОСТ (без скролла к комментарию,
+                // commentId=0L). Раньше работал только неявно через клик по всей карточке.
+                Text(
+                    text = linkifyVkText(
+                        item.parentText,
+                        linkColor,
+                        onUrlClick = { url -> openUrlExternal(context, url) },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (onDeepLink != null && item.parentOwnerId != 0L && item.parentItemId != 0L)
+                        Modifier.clickable {
+                            onDeepLink(re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenPost(item.parentOwnerId, item.parentItemId, 0L))
+                        }
+                    else
+                        Modifier,
+                )
+            }
+
+            // #NOTIF-SNAP-CARD (2026-11-05): горизонтальный скролл ВСЕХ вложений с
+            // bubble overlay — ПОД parentText (порядок как в снапшоте VK web:
+            // header → text → post-text → attachments). Для клип-карточек превью
+            // рендерится вертикальным 72×120 (передаём isClip в AttachmentThumb).
+            if (item.attachments.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(item.attachments) { att ->
+                        AttachmentThumb(
+                            attachment = att,
+                            bubbleText = item.bubbleText,
+                            isClip = isClip,
+                            onClick = {
+                                // VK-WEB-CARD (HAR-SNAP-FIX): для bubble-вложения (like_comment)
+                                // клик по превью открывает ТОТ ЖЕ target что и клик по карточке
+                                // (clip с commentId через deepLink), а НЕ onPostClick —
+                                // onPostClick ожидает wall-post (ownerId, postId), а для bubble
+                                // att.itemId это video_id/short_video_id, не post_id.
+                                // Без этой проверки клик уводил в профиль или несуществующий пост.
+                                if (item.attachmentType.equals("bubble", ignoreCase = true)) {
+                                    navigate()
+                                } else if (att.type == "video" || att.type == "clip") {
+                                    // #NOTIF-UNIFORM-CARD (2026-11-05): клип/видео-превью →
+                                    // navigate() (глубокий переход → OpenVideo), а НЕ onPostClick:
+                                    // клип не wall-пост, onPostClick уводил в несуществующий пост.
+                                    navigate()
+                                }
+                                // FIX-C: Фото — открываем native PhotoViewer (pinch-zoom + swipe),
+                                // а не пост (см. аудит AUDIT-REPLIES-UI, находка 7).
+                                // Список URL всех фото-вложений + индекс тапнутого → PhotoViewer.
+                                else if (att.type == "photo" && !att.thumbUrl.isNullOrBlank()) {
+                                    val photoUrls = item.attachments
+                                        .filter { it.type == "photo" }
+                                        .mapNotNull { it.thumbUrl }
+                                    val clickedIdx = photoUrls.indexOf(att.thumbUrl)
+                                    onPhotoClick(
+                                        photoUrls,
+                                        if (clickedIdx >= 0) clickedIdx else 0,
+                                    )
+                                }
+                                // Прочие типы — fallback на пост/профиль (как раньше)
+                                else if (onPostClick != null && att.ownerId != 0L && att.itemId != 0L) {
+                                    onPostClick(att.ownerId, att.itemId)
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+
+            // Превью ответа (reply_comment)
+            if (item.replyText.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .clickable { navigate() }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        item.profilesMap[item.replyFromId]?.let { replyProfile ->
+                            Text(
+                                text = replyProfile.name,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                // #NOTIF-CLICK-PARTS (2026-11-05): имя автора ответа —
+                                // кликабельно (те же правила знака, что в clickProfile):
+                                // id>0 + onUserClick → профиль; id<0 + onDeepLink → сообщество.
+                                modifier = when {
+                                    item.replyFromId > 0 && onUserClick != null ->
+                                        Modifier.clickable { onUserClick(item.replyFromId) }
+                                    item.replyFromId < 0 && onDeepLink != null ->
+                                        Modifier.clickable {
+                                            onDeepLink(re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenCommunity(-item.replyFromId))
+                                        }
+                                    else -> Modifier
+                                },
+                            )
+                        }
+                        Text(
+                            text = linkifyVkText(
+                                item.replyText,
+                                linkColor,
+                                onUrlClick = { url -> openUrlExternal(context, url) },
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+
             // VK-WEB-CARD: bubbleText — отдельным блоком когда НЕТ attachments
             // (overlay только для превью). Если attachments есть — bubbleText рендерится
             // как overlay на превью (см. AttachmentThumb ниже).
@@ -1611,6 +1743,7 @@ private fun NotificationCard(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .clickable { navigate() }
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                 ) {
                     Text(
@@ -1677,55 +1810,6 @@ private fun NotificationCard(
                                 }
                             }
                         }
-                    }
-                }
-            }
-
-            // VK-WEB-CARD: горизонтальный скролл ВСЕХ вложений (даже одного) с bubble overlay.
-            // compact-превью в правой колонке убрано — всё через LazyRow как в VK web.
-            if (item.attachments.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    items(item.attachments) { att ->
-                        AttachmentThumb(
-                            attachment = att,
-                            bubbleText = item.bubbleText,
-                            onClick = {
-                                // VK-WEB-CARD (HAR-SNAP-FIX): для bubble-вложения (like_comment)
-                                // клик по превью открывает ТОТ ЖЕ target что и клик по карточке
-                                // (clip с commentId через deepLink), а НЕ onPostClick —
-                                // onPostClick ожидает wall-post (ownerId, postId), а для bubble
-                                // att.itemId это video_id/short_video_id, не post_id.
-                                // Без этой проверки клик уводил в профиль или несуществующий пост.
-                                if (item.attachmentType.equals("bubble", ignoreCase = true)) {
-                                    navigate()
-                                } else if (att.type == "video" || att.type == "clip") {
-                                    // Видео/клип — открываем через onPostClick с owner/id
-                                    if (onPostClick != null && att.ownerId != 0L && att.itemId != 0L) {
-                                        onPostClick(att.ownerId, att.itemId)
-                                    }
-                                }
-                                // FIX-C: Фото — открываем native PhotoViewer (pinch-zoom + swipe),
-                                // а не пост (см. аудит AUDIT-REPLIES-UI, находка 7).
-                                // Список URL всех фото-вложений + индекс тапнутого → PhotoViewer.
-                                else if (att.type == "photo" && !att.thumbUrl.isNullOrBlank()) {
-                                    val photoUrls = item.attachments
-                                        .filter { it.type == "photo" }
-                                        .mapNotNull { it.thumbUrl }
-                                    val clickedIdx = photoUrls.indexOf(att.thumbUrl)
-                                    onPhotoClick(
-                                        photoUrls,
-                                        if (clickedIdx >= 0) clickedIdx else 0,
-                                    )
-                                }
-                                // Прочие типы — fallback на пост/профиль (как раньше)
-                                else if (onPostClick != null && att.ownerId != 0L && att.itemId != 0L) {
-                                    onPostClick(att.ownerId, att.itemId)
-                                }
-                            },
-                        )
                     }
                 }
             }
@@ -1892,10 +1976,19 @@ private fun AttachmentThumb(
     // VK-WEB-CARD: bubble-text overlay поверх превью (как в VK web — текст комментария
     // на превью клипа/видео). Пустая строка — overlay не рендерится.
     bubbleText: String = "",
+    // #NOTIF-SNAP-CARD (2026-11-05): клип-карточка (like_comment/reply на short_video).
+    // Если true — превью рендерим ВЕРТИКАЛЬНЫМ 72×120 (как в снапшоте VK web), иначе
+    // квадратным 72×72. Для клипа bubbleText = main_text (заголовок ролика) — оверлей
+    // остаётся поверх вертикального превью.
+    isClip: Boolean = false,
 ) {
+    // Размер превью: клип → вертикальный 72×120; остальное → квадрат 72×72.
+    val thumbWidthDp = 72.dp
+    val thumbHeightDp = if (isClip) 120.dp else 72.dp
     Box(
         modifier = Modifier
-            .size(72.dp)
+            .width(thumbWidthDp)
+            .height(thumbHeightDp)
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick),
@@ -1905,7 +1998,10 @@ private fun AttachmentThumb(
             AsyncImage(
                 model = attachment.thumbUrl,
                 contentDescription = attachment.type,
-                modifier = Modifier.size(72.dp).clip(RoundedCornerShape(8.dp)),
+                modifier = Modifier
+                    .width(thumbWidthDp)
+                    .height(thumbHeightDp)
+                    .clip(RoundedCornerShape(8.dp)),
             )
         } else {
             // Fallback-иконка по типу вложения

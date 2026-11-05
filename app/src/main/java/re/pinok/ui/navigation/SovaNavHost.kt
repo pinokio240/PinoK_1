@@ -574,6 +574,9 @@ fun SovaNavHost(
                     // подтянет CDN URL и метаданные по owner_id+video_id.
                     // VK-WEB-CARD: log commentId (reply=) для будущей реализации скролла к комментарию.
                     AppLog.i("SovaNavHost", "DEEP_LINK: opening VideoPlayer overlay owner=${link.ownerId} video=${link.videoId} commentId=${link.commentId}")
+                    // #NOTIF-UNIFORM-CARD (2026-11-05): пробрасываем commentId в
+                    // VideoHolder, чтобы VideoPlayerScreen авто-открыл шторку комментариев
+                    // и проскроллил к целевому комментарию (клип/видео reply=).
                     VideoHolder.open(Video(
                         id = link.videoId,
                         ownerId = link.ownerId,
@@ -581,7 +584,7 @@ fun SovaNavHost(
                         description = null,
                         duration = 0,
                         date = 0,
-                    ))
+                    ), link.commentId)
                 }
                 is re.pinok.realtime.VkUrlDeepLinker.DeepLinkAction.OpenUser -> {
                     AppLog.i("SovaNavHost", "DEEP_LINK: navigating to UserProfile user=${link.userId}")
@@ -3708,11 +3711,25 @@ object VideoHolder {
     @Volatile
     var last: Video? = null
 
+    // #NOTIF-UNIFORM-CARD (2026-11-05): id комментария, к которому нужно
+    // проскроллить в VideoPlayerScreen после открытия (для клип/видео-уведомлений,
+    // reply= в deep link). Однократно потребляется и сбрасывается при открытии
+    // шторки комментариев в VideoPlayerScreen.
+    @Volatile
+    var commentId: Long = 0L
+
     private val _active = MutableStateFlow<Video?>(null)
     val active = _active.asStateFlow()
 
     fun open(video: Video) {
+        open(video, 0L)
+    }
+
+    // #NOTIF-UNIFORM-CARD (2026-11-05): перегрузка с commentId — ставит last/active
+    // и запоминает target-комментарий для авто-скролла шторки комментариев.
+    fun open(video: Video, commentId: Long) {
         last = video
+        this.commentId = commentId
         _active.value = video
     }
 
@@ -3727,6 +3744,7 @@ object VideoHolder {
      */
     fun clear() {
         last = null
+        commentId = 0L
         _active.value = null
     }
 }

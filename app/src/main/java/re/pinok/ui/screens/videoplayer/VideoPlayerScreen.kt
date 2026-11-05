@@ -49,7 +49,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -163,6 +165,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import android.net.Uri
 import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -184,6 +187,7 @@ import re.pinok.media.VideoPlayerConfig
 import re.pinok.service.VideoPlaybackBus
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.screens.feed.CommentItem
+import re.pinok.ui.navigation.VideoHolder
 import re.pinok.util.AppLog
 import re.pinok.util.HevcSupport
 import re.pinok.util.VkUserAgent
@@ -478,6 +482,10 @@ fun VideoPlayerScreen(
     var videoLikeCount by remember(resolvedVideo) { mutableStateOf(resolvedVideo.likesCount) }
     // Шторки действий — доступны и в портрете, и в fullscreen/landscape.
     var showCommentsSheet by remember { mutableStateOf(false) }
+    // #NOTIF-UNIFORM-CARD (2026-11-05): таргет-комментарий из клип/видео-уведомления
+    // (опционально). Снимок из VideoHolder на момент входа — потребляется авто-эффектом
+    // (открыть шторку) и передаётся в VideoCommentsSheet для скролла к комментарию.
+    val pendingCommentId = remember { VideoHolder.commentId.takeIf { it != 0L } }
     var showShareSheet by remember { mutableStateOf(false) }
     // DL-D (Wave 2) #VIDEO-DOWNLOAD-SHEET: шторка выбора качества скачивания.
     // qualityVideo — снапшот Video на момент открытия: опции/размеры шторки
@@ -516,6 +524,17 @@ fun VideoPlayerScreen(
         while (isActive) {
             app.suppressAuthRelaunchFor(60_000L)
             delay(45_000L)
+        }
+    }
+
+    // #NOTIF-UNIFORM-CARD (2026-11-05): авто-открытие шторки комментариев, если из
+    // клип/видео-уведомления пришёл commentId (VideoHolder.commentId, deep link
+    // reply=). Одноразово: открываем шторку и сбрасываем флаг в VideoHolder —
+    // повторное открытие того же видео не будет каждый раз тащить шторку.
+    LaunchedEffect(Unit) {
+        if (pendingCommentId != null) {
+            VideoHolder.commentId = 0L
+            showCommentsSheet = true
         }
     }
 
@@ -2887,6 +2906,9 @@ fun VideoPlayerScreen(
             video = resolvedVideo,
             onDismiss = { showCommentsSheet = false },
             onUserClick = onUserClick,
+            // #NOTIF-UNIFORM-CARD (2026-11-05): скролл к целевому комментарию
+            // при входе через clip/видео-уведомление с reply=.
+            scrollToCommentId = pendingCommentId,
         )
     }
     if (showShareSheet) {
@@ -3648,11 +3670,17 @@ private fun VideoCommentsSheet(
     video: Video,
     onDismiss: () -> Unit,
     onUserClick: (Long) -> Unit = {},
+    // #NOTIF-UNIFORM-CARD (2026-11-05): целевой комментарий для автопрокрутки
+    // при входе из клип/видео-уведомления. null = никакого скролла.
+    scrollToCommentId: Long? = null,
 ) {
     val context = LocalContext.current
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // #NOTIF-UNIFORM-CARD (2026-11-05): состояние списка для скролла к целевому
+    // комментарию (из клип/видео-уведомления).
+    val listState = rememberLazyListState()
 
     var comments by remember { mutableStateOf<List<Comment>>(emptyList()) }
     var authors by remember { mutableStateOf<Map<Long, UserProfile>>(emptyMap()) }
@@ -3664,6 +3692,10 @@ private fun VideoCommentsSheet(
     // и id текущего юзера (для isOwnComment в CommentItem).
     var sharingComment by remember { mutableStateOf<Comment?>(null) }
     val currentUserId = remember { app.tokenStorage.load()?.userId ?: 0L }
+
+    // #NOTIF-UNIFORM-CARD (2026-11-05): запомненный статус — уже ли проматывали
+    // к целевому комментарию (чтобы не скроллить заново после createComment/refresh).
+    var hasScrolledToTarget by remember { mutableStateOf(false) }
 
     // can_comment: 0 = комментарии отключены; null = API не отдал поле — ввод
     // НЕ блокируем (VK вернёт ошибку на createComment, покажем её честно).
@@ -3677,6 +3709,22 @@ private fun VideoCommentsSheet(
                 val r = app.apiClient.videoGetComments(video.ownerId, video.id, count = 50)
                 comments = r.comments
                 authors = r.profiles
+                // #NOTIF-UNIFORM-CARD (2026-11-05): если пришли из уведомления с
+                // commentId и комментарий в списке — проматываем к нему один раз.
+                val target = scrollToCommentId
+                if (target != null && !hasScrolledToTarget) {
+                    val idx = comments.indexOfFirst { it.id == target }
+                    if (idx >= 0) {
+                        hasScrolledToTarget = true
+                        listState.scrollToItem(index = idx)
+                    }
+                }
+            } catch (e: CancellationException) {
+                // #NOTIF-COMMENT-GO-TO (2026-11-06): отмена корутины при закрытии
+                // шторки/плеера — НЕ ошибка. Compose бросает ForgottenCoroutineScopeException
+                // (подтип CancellationException), когда rememberCoroutineScope уже покинул
+                // композицию; глотать её нельзя — иначе ложный лог и фиктивный errorMsg.
+                throw e
             } catch (e: Exception) {
                 AppLog.e(TAG, "videoGetComments error for ${video.ownerId}_${video.id}", e)
                 errorMsg = "Не удалось загрузить комментарии: ${e.message}"
@@ -3779,6 +3827,7 @@ private fun VideoCommentsSheet(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(360.dp),
+                        state = listState,
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                     ) {
                         items(comments, key = { c -> c.id }) { comment ->

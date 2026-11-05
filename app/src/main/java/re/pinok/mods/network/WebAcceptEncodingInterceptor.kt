@@ -96,8 +96,17 @@ object WebAcceptEncodingInterceptor : Interceptor {
                 }
             }
         } catch (e: Exception) {
+            // #AE-CANCEL-FIX (2026-11-05): если поток HTTP/2 сброшен/вызов отменён
+            // (StreamResetException CANCEL при call.cancel() — быстрый уход с экрана,
+            // таймаут, повторный запрос), НЕ глотаем исключение и НЕ возвращаем
+            // полу-прочитанное тело: body.source() уже сдвинут, вернуть «как есть»
+            // нельзя — вызовущий получит битый поток и ложную ошибку парсинга.
+            // Пробрасываем — OkHttp корректно завершит отменённый call.
+            if (chain.call().isCanceled() || e is java.util.concurrent.CancellationException) {
+                throw e
+            }
             AppLog.e("WebAcceptEncoding", "decode '$encoding' failed on ${req.url}", e)
-            return resp // возвращаем нераспакованное — пусть вызывающий увидит ошибку
+            return resp // реальная сетевая ошибка (не отмена) — нераспакованное «как есть»
         }
 
         val newBody = decodedBytes.toResponseBody(body.contentType())

@@ -283,7 +283,12 @@ object VkUrlDeepLinker {
                     "clip" -> DeepLinkAction.OpenVideo(
                         ownerId = parsed.ownerId,
                         videoId = parsed.itemId,
-                        commentId = parsed.commentId,
+                        // #NOTIF-SNAP-CARD (2026-11-05): фолбэк на parentCommentId, если URL
+                        // не дал reply= (аналогично post/topic выше). Для клип-карточек
+                        // парсер кладёт commentId и в parentUrl (?reply=), и в parentCommentId
+                        // — оба источника должны давать корректный скролл к комментарию.
+                        commentId = parsed.commentId.takeIf { it != 0L }
+                            ?: item.parentCommentId,
                     )
                     "user" -> {
                         if (parsed.ownerId > 0) DeepLinkAction.OpenUser(parsed.ownerId)

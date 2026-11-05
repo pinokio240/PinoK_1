@@ -35,9 +35,12 @@ android {
         // #RELEASE-V223-BUMP (2026-10-16): bump 222→223 — накопленные фиксы:
         // настройки мессенджера (шрифт/фон диалога, фиксация панели, домашний экран),
         // редактор панелей (Лента), flood-control (rps 3 + retry 6/9), навигация назад.
-        versionCode = 228
-        versionName = "2.2.8"
-        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-11-01T12:00:00+03:00\"")
+        // #RELEASE-V229-BUMP (2026-11-05): bump 228→229 — уведомления: единая карточка,
+        // переход по уведомлению к комментарию (пост/клип), фикс лупа загрузки
+        // комментариев (CancellationException при закрытии плеера).
+        versionCode = 229
+        versionName = "2.2.9"
+        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-11-05T12:00:00+03:00\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

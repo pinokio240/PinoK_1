@@ -481,7 +481,40 @@ fun PostDetailScreen(
         }
 
         // 3. Не нашли (комментарий за пределами первой страницы или удалён) —
-        // оставляем target чтобы пагинация могла подтянуть. Логируем для диагностики.
+        //    активный «догон»: подгружаем следующие страницы, пока не найдём
+        //    target или не достигнем конца (#NOTIF-COMMENT-GO-TO). Раньше target
+        //    просто висел, а пагинация срабатывала только по ручному скроллу →
+        //    «клик по уведомлению не скроллит к комментарию».
+        if (targetCommentId != 0L) {
+            val endReachedNow = endReached
+            val loadingMoreNow = loadingMore
+            if (!endReachedNow && !loadingMoreNow) {
+                val offset = comments.size
+                val result = try {
+                    app.apiClient.wallGetComments(
+                        post?.ownerId ?: 0L, post?.id ?: 0L,
+                        count = 30, offset = offset,
+                    )
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AppLog.w("PostDetail", "DEEPLINK: load-more for target $targetCommentId failed: ${e.message}")
+                    null
+                }
+                if (result != null && result.comments.isNotEmpty()) {
+                    comments = comments + result.comments
+                    profiles += result.profiles
+                    // Комментарий может быть в новой порции — эффект перезапустится
+                    // по изменению comments и найдет его на следующем проходе.
+                    AppLog.i("PostDetail", "DEEPLINK: target $targetCommentId not in loaded, fetched +${result.comments.size} (offset=$offset) — will re-check")
+                } else {
+                    endReached = true
+                    AppLog.w("PostDetail", "DEEPLINK: target comment $targetCommentId not found after fetch (endReached)")
+                    PostDetailTarget.commentId = null
+                }
+                return@LaunchedEffect
+            }
+        }
         AppLog.w("PostDetail", "DEEPLINK: target comment $targetCommentId not found in ${allComments.size} comments (maybe paginated out)")
     }
 
