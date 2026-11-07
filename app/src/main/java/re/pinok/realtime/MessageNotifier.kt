@@ -8,7 +8,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.LocusId
+import androidx.core.app.LocusId
 import re.pinok.ui.MainActivity
 import re.pinok.R
 import re.pinok.util.AppLog
