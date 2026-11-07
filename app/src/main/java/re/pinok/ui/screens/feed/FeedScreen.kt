@@ -3033,6 +3033,15 @@ private fun CommentsBottomSheet(
     // Расширенный пикер (Музыка/Видео/Фото/Документы) — общий с чатом и комментариями к посту.
     var showAttachmentPicker by remember { mutableStateOf(false) }
     var attachmentPickerTab by remember { mutableStateOf(AttachmentPickerTab.Music) }
+    // #COMMENT-EDIT-FEED: стейты диалогов «Редактировать»/«Удалить» своих комментариев
+    // в инлайн-шите ленты (паритет с PostDetailScreen). Раньше CommentItem отрисовывал
+    // меню «Редактировать»/«Удалить» для своих комментариев, но onEditComment /
+    // onDeleteComment не передавались → колбэки были пустыми {} → нажатие ничего не делало.
+    var editingComment by remember { mutableStateOf<Comment?>(null) }
+    var editText by remember { mutableStateOf("") }
+    var editBusy by remember { mutableStateOf(false) }
+    var deletingComment by remember { mutableStateOf<Comment?>(null) }
+    var deleteBusy by remember { mutableStateOf(false) }
 
     // Лаунчеры для вложений.
     // #ATTACH-UNIFY (P0.1): фото комментария грузится через ФОТО-пайплайн
@@ -3242,6 +3251,15 @@ private fun CommentsBottomSheet(
                                 },
                                 currentUserId = currentUserId,
                                 onShareComment = { c -> sharingComment = c },
+                                // #COMMENT-EDIT-FEED: проброс колбэков редактирования/удаления
+                                // своих комментариев (паритет с PostDetailScreen:911-917).
+                                onEditComment = { c ->
+                                    editingComment = c
+                                    editText = c.text
+                                },
+                                onDeleteComment = { c ->
+                                    deletingComment = c
+                                },
                                 // FIX-B: проброс onUserClick для имени автора комментария.
                                 onUserClick = onUserClick,
                             )
@@ -3529,6 +3547,165 @@ private fun CommentsBottomSheet(
             }
             Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+
+    // #COMMENT-EDIT-FEED: диалог «Редактировать» свой комментарий (паритет с
+    // PostDetailScreen:1373-1466). TextField предзаполнен comment.text; подтверждение
+    // → wallEditComment → при успехе обновляем текст в локальных списках без перезагрузки.
+    val editing = editingComment
+    if (editing != null) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!editBusy) {
+                    editingComment = null
+                    editText = ""
+                }
+            },
+            title = { Text("Редактировать комментарий") },
+            text = {
+                OutlinedTextField(
+                    value = editText,
+                    onValueChange = { if (!editBusy) editText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Текст комментария") },
+                    enabled = !editBusy,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (editBusy) return@TextButton
+                        val target = editing
+                        val newText = editText.trim()
+                        if (newText.isBlank()) return@TextButton
+                        val owner = post.ownerId
+                        if (owner == 0L) return@TextButton
+                        editBusy = true
+                        scope.launch {
+                            try {
+                                val ok = app.apiClient.wallEditComment(
+                                    ownerId = owner,
+                                    commentId = target.id,
+                                    message = newText,
+                                )
+                                if (ok) {
+                                    comments = comments.map { c ->
+                                        if (c.id == target.id) c.copy(text = newText) else c
+                                    }
+                                    localComments = localComments.map { c ->
+                                        if (c.id == target.id) c.copy(text = newText) else c
+                                    }
+                                    threadReplies = threadReplies.mapValues { (_, reps) ->
+                                        reps.map { c ->
+                                            if (c.id == target.id) c.copy(text = newText) else c
+                                        }
+                                    }
+                                    editingComment = null
+                                    editText = ""
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        ctx,
+                                        "Не удалось изменить комментарий",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            } catch (e: Exception) {
+                                AppLog.e("CommentsBottomSheet", "edit comment error", e)
+                                android.widget.Toast.makeText(
+                                    ctx,
+                                    "Ошибка изменения комментария",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            } finally {
+                                editBusy = false
+                            }
+                        }
+                    },
+                    enabled = !editBusy,
+                ) {
+                    Text(if (editBusy) "Сохраняю…" else "Сохранить")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        if (!editBusy) {
+                            editingComment = null
+                            editText = ""
+                        }
+                    },
+                    enabled = !editBusy,
+                ) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
+
+    // #COMMENT-EDIT-FEED: confirm-диалог «Удалить» свой комментарий (паритет с
+    // PostDetailScreen:1468-1532).
+    val deleting = deletingComment
+    if (deleting != null) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!deleteBusy) deletingComment = null
+            },
+            title = { Text("Удалить комментарий?") },
+            text = { Text("Это действие нельзя отменить. Комментарий будет удалён без возможности восстановления.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (deleteBusy) return@TextButton
+                        val target = deleting
+                        val owner = post.ownerId
+                        if (owner == 0L) return@TextButton
+                        deleteBusy = true
+                        scope.launch {
+                            try {
+                                val ok = app.apiClient.wallDeleteComment(
+                                    ownerId = owner,
+                                    commentId = target.id,
+                                )
+                                if (ok) {
+                                    comments = comments.filterNot { it.id == target.id }
+                                    localComments = localComments.filterNot { it.id == target.id }
+                                    threadReplies = threadReplies.mapValues { (_, reps) ->
+                                        reps.filterNot { it.id == target.id }
+                                    }
+                                    deletingComment = null
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        ctx,
+                                        "Не удалось удалить комментарий",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            } catch (e: Exception) {
+                                AppLog.e("CommentsBottomSheet", "delete comment error", e)
+                                android.widget.Toast.makeText(
+                                    ctx,
+                                    "Ошибка удаления комментария",
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            } finally {
+                                deleteBusy = false
+                            }
+                        }
+                    },
+                    enabled = !deleteBusy,
+                ) {
+                    Text(if (deleteBusy) "Удаляю…" else "Удалить")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { if (!deleteBusy) deletingComment = null },
+                    enabled = !deleteBusy,
+                ) {
+                    Text("Отмена")
+                }
+            },
+        )
     }
 
     // Единый пикер библиотеки VK — открывается при выборе соответствующего

@@ -614,6 +614,10 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // где они показываются (1/2). Default true — как у сообщений.
             notifyCommunitiesSound = p[Keys.NOTIFY_COMMUNITIES_SOUND] ?: true,
             notifyCommunitiesVibration = p[Keys.NOTIFY_COMMUNITIES_VIBRATION] ?: true,
+            // #MSG-PRIORITY: личные сообщения обходят DND (высокий приоритет). Default TRUE —
+            // юзер хочет, чтобы сообщения всегда всплывали. Выключает → messages вместо
+            // messages_priority (подчиняется DND/quiet-hours как раньше).
+            messagesHighPriority = p[Keys.MESSAGES_HIGH_PRIORITY] ?: true,
             // P0.3 #SERVER-DND: кэш server-side silent_until. 0 = DND выключен
             // (или ещё не опрошен). Обновляется NotificationsPoller каждые ~2 мин.
             silentUntil = p[Keys.SILENT_UNTIL] ?: 0L,
@@ -1399,6 +1403,11 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     ))
     suspend fun setNotifyCommunitiesSound(v: Boolean)   = put(Keys.NOTIFY_COMMUNITIES_SOUND, v)
     suspend fun setNotifyCommunitiesVibration(v: Boolean) = put(Keys.NOTIFY_COMMUNITIES_VIBRATION, v)
+    // #MSG-PRIORITY: личные сообщения — высокий приоритет (обход DND). Default true.
+    // SovaApp.startMessageNotifier по этому флагу выбирает messages_priority
+    // (setBypassDnd) вместо messages для прямых DM и НЕ применяет silent-downgrade
+    // при quiet-hours/server-DND. См. MessageNotifier.CHANNEL_MESSAGES_PRIORITY.
+    suspend fun setMessagesHighPriority(v: Boolean) = put(Keys.MESSAGES_HIGH_PRIORITY, v)
     // P0.3 #SERVER-DND: кэш server-side silent_until. Пишет NotificationsPoller.
     suspend fun setSilentUntil(v: Long) = put(Keys.SILENT_UNTIL, v)
 
@@ -2000,6 +2009,15 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         /** Fix #390 #NOTIFY-MODES: вибрация уведомлений от сообществ (default true). */
         val notifyCommunitiesVibration: Boolean = true,
         /**
+         * #MSG-PRIORITY: личные сообщения — высокий приоритет (обход DND). Default true.
+         * Вкл → DM идут в [re.pinok.realtime.MessageNotifier.CHANNEL_MESSAGES_PRIORITY]
+         * (setBypassDnd=true) и НЕ сапрессаются quiet-hours/server-DND. Выкл → прежний
+         * канал `messages` + silent-downgrade (как раньше). Сообщества этот флаг не
+         * касается. Поле с дефолтом — прецедент notifyCommunitiesSound выше: existing
+         * именованные конструкторы Snapshot остаются компилируемыми без правок.
+         */
+        val messagesHighPriority: Boolean = true,
+        /**
          * P0.3 #SERVER-DND: cached server-side silent_until (Unix seconds).
          * 0 = DND выключен или ещё не опрошен. Пишется NotificationsPoller.pollOnce
          * (~2 мин), читается SovaApp.startMessageNotifier чтобы локально подавлять
@@ -2480,6 +2498,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val NOTIFY_MODE             = intPreferencesKey("notify_mode")
         val NOTIFY_COMMUNITIES_SOUND = booleanPreferencesKey("notify_communities_sound")
         val NOTIFY_COMMUNITIES_VIBRATION = booleanPreferencesKey("notify_communities_vibration")
+        // #MSG-PRIORITY: личные сообщения — высокий приоритет (обход DND).
+        val MESSAGES_HIGH_PRIORITY = booleanPreferencesKey("messages_high_priority")
         // W30-3 #VIDEO-BG-PLAYER: шаг прокрутки фонового видео-плеера (секунды).
         val VIDEO_SEEK_STEP_SEC = intPreferencesKey("video_seek_step_sec")
         // #VIDEO-BG-TOGGLE (волна 39): фоновое воспроизведение видео вкл/выкл.

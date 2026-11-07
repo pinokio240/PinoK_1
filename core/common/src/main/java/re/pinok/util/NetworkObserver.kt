@@ -6,10 +6,16 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import re.pinok.util.AppLog
 import java.util.concurrent.atomic.AtomicBoolean
@@ -37,6 +43,92 @@ class NetworkObserver(private val context: Context) {
     private val registered = AtomicBoolean(false)
     private var currentNetwork: Network? = null
     private var callback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * #NET-GRACE (3с / 2 пробы): при потере сети не объявляем offline мгновенно.
+     *
+     * КОНТЕКСТ ПРОБЛЕМЫ: ConnectivityManager.onLost срабатывает на ЛЮБОЕ пропадание
+     * сети — включая 200мс Wi-Fi blip, кратковременный radio fallback, DHCP renewal.
+     * Раньше onLost с !stillOnline сразу выставлял [_isOnline]=false и звал
+     * [onLostListeners], в котором SovaApp делал `httpClient.dispatcher.cancelAll()`
+     * → немедленно рвались in-flight HLS/DASH-сегменты ExoPlayer (он использует тот
+     * же OkHttpClient через OkHttpDataSource). Итог: малейший обрыв = пауза видео.
+     *
+     * РЕШЕНИЕ: при onLost/onUnavailable с !stillOnline запускаем grace-корутину
+     * [offlineGraceJob] на 3 секунды с 2 TCP-пробами [hasRealInternetDeferred]
+     * (vk.com:443, timeout 1.5с). Если ХОТЯ БЫ ОДНА проба прошла — считаем
+     * мигание транзиентным, остаёмся онлайн (плеер НЕ трогаем, OkHttp calls НЕ
+     * отменяем, _isOnline НЕ меняем). Если обе пробы упали И 3с истекли — тогда
+     * настоящий offline: _isOnline=false + onLostListeners (cancelAll + reprepare).
+     *
+     * onAvailable (сеть вернулась) во время grace отменяет [offlineGraceJob] —
+     * мигание было точно транзиентным, объявлять offline не нужно.
+     *
+     * Это убирает «останавливается видео/аудио при малейшем обрыве» — 200мс Wi-Fi
+     * blip теперь полностью прозрачен для пользователя.
+     */
+    private val graceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    @Volatile
+    private var offlineGraceJob: Job? = null
+
+    /**
+     * #NET-GRACE: запускает 3с/2-probe grace перед объявлением offline.
+     * См. документацию поля [offlineGraceJob]. Вызывается из onLost (при полной
+     * потере сети) и onUnavailable. Если grace уже запущен — отменяем старый и
+     * стартуем новый (защита от спама onLost при мигании интерфейса).
+     *
+     * ВО ВРЕМЯ GRACE: [_isOnline] НЕ меняется, [onLostListeners] НЕ зовутся.
+     * Только по истечении grace с двумя упавшими пробами → offline-сигнал.
+     */
+    private fun startOfflineGrace() {
+        offlineGraceJob?.cancel()
+        offlineGraceJob = graceScope.launch {
+            val started = System.currentTimeMillis()
+            AppLog.i("NetworkObserver",
+                "#NET-GRACE: starting 3s grace with 2 TCP probes (vk.com:443, timeout 1500ms)")
+            var recovered = false
+            // Проба 1 — сразу (мгновенная проверка, не блокирует 1.5с если сеть уже вернулась).
+            try {
+                if (hasRealInternetDeferred(1_500)) recovered = true
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (_: Exception) {
+                // probe failed — будет вторая попытка
+            }
+            // Проба 2 — через 1с (если первая упала).
+            if (!recovered && isActive) {
+                delay(1_000L)  // cancellable: если onAvailable отменит job — выходим
+                val elapsed = System.currentTimeMillis() - started
+                if (elapsed < 3_000L && isActive) {
+                    try {
+                        if (hasRealInternetDeferred(1_500)) recovered = true
+                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                        throw ce
+                    } catch (_: Exception) {
+                        // обе пробы упали
+                    }
+                }
+            }
+            if (recovered) {
+                AppLog.i("NetworkObserver",
+                    "#NET-GRACE: transient hiccup recovered — staying ONLINE (no cancelAll, no reprepare, _isOnline unchanged)")
+                // _isOnline НЕ менялся во время grace — оставляем как есть (true).
+                return@launch
+            }
+            // Дожидаемся конца 3с окна перед объявлением offline (если пробы прошли быстро).
+            val remaining = 3_000L - (System.currentTimeMillis() - started)
+            if (remaining > 0) {
+                delay(remaining)  // cancellable: onAvailable во время ожидания отменит job
+            }
+            AppLog.w("NetworkObserver",
+                "#NET-GRACE: 3s grace expired, both probes failed — declaring OFFLINE (cancelAll + reprepare will fire)")
+            _isOnline.value = false
+            onLostListeners.forEach { listener ->
+                try { listener() } catch (_: Exception) {}
+            }
+        }
+    }
 
     /** Fix #171: callback для registerDefaultNetworkCallback (смена default route). */
     private var defaultCallback: ConnectivityManager.NetworkCallback? = null
@@ -161,6 +253,11 @@ class NetworkObserver(private val context: Context) {
             override fun onAvailable(network: Network) {
                 AppLog.i("NetworkObserver", "onAvailable: $network")
                 currentNetwork = network
+                // #NET-GRACE: сеть вернулась во время grace-окна (или просто стала
+                // доступна) — отменяем pending offline grace. Мигание было
+                // транзиентным, объявлять offline не нужно.
+                offlineGraceJob?.cancel()
+                offlineGraceJob = null
                 _isOnline.value = true
             }
 
@@ -168,31 +265,45 @@ class NetworkObserver(private val context: Context) {
                 AppLog.w("NetworkObserver", "onLost: $network")
                 currentNetwork = null
                 val stillOnline = checkOnline()
-                _isOnline.value = stillOnline
-                // Fix #171: вызываем onLostListeners ТОЛЬКО при полной потере сети.
-                // Раньше onLost срабатывал на потерю ЛЮБОЙ сети — даже если остался
-                // второй интерфейс (switch mobile→Wi-Fi). Это вызывало
-                // httpClient.dispatcher.cancelAll() который убивал HLS-стрим ExoPlayer
-                // (он использует тот же httpClient через OkHttpDataSource).
-                // При switch — default-network-changed listener сделает мягкий reset.
-                if (!stillOnline) {
-                    AppLog.i("NetworkObserver", "onLost: fully offline — evicting pool + cancelAll")
-                    onLostListeners.forEach { listener ->
-                        try { listener() } catch (_: Exception) {}
-                    }
-                } else {
+                if (stillOnline) {
+                    // Fix #171: onLost сработал на потерю НЕ-default сети — остался
+                    // второй интерфейс (switch mobile→Wi-Fi). Не трогаем плеер, не
+                    // отменяем OkHttp calls. default-network-changed listener сделает
+                    // мягкий reset (evictAll без cancelAll).
+                    _isOnline.value = true
                     AppLog.i("NetworkObserver", "onLost: network switched (still online) — skip cancelAll, default-network-changed listener will handle")
+                    return
                 }
+                // #NET-GRACE: ПОЛНАЯ потеря сети по ConnectivityManager — но НЕ
+                // объявляем offline мгновенно. Запускаем 3с/2-probe grace: если сеть
+                // вернётся (200мс Wi-Fi blip, radio fallback) — останемся онлайн,
+                // ExoPlayer даже не заметит. _isOnline НЕ меняем до истечения grace.
+                AppLog.i("NetworkObserver", "onLost: fully offline per ConnectivityManager — arming #NET-GRACE (3s/2 probes) before declaring offline")
+                startOfflineGrace()
             }
 
             override fun onUnavailable() {
                 AppLog.w("NetworkObserver", "onUnavailable")
-                _isOnline.value = false
+                // #NET-GRACE: onUnavailable = система сдалась (no network available
+                // at all). Это более жёсткий сигнал чем onLost, но для консистентности
+                // тоже прогоняем через grace — если за 3с сеть вернётся (особенно на
+                // мобильной), не рвём плеер. _isOnline НЕ меняем до истечения grace.
+                startOfflineGrace()
             }
 
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                 val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 if (hasInternet != _isOnline.value) {
+                    // #NET-GRACE: если grace-корутина ещё работает (onLost ещё не
+                    // объявил offline), НЕ меняем _isOnline по capabilities —
+                    // пусть grace-пробы решат, транзиентное это или настоящий offline.
+                    // Иначе captive portal / DHCP renewal могли бы мигнуть _isOnline=false
+                    // и показать OfflineBanner на 200мс раньше, чем grace завершится.
+                    val graceActive = offlineGraceJob?.isActive == true
+                    if (graceActive && !hasInternet) {
+                        AppLog.i("NetworkObserver", "capabilities changed, online=$hasInternet — SUPPRESSED (#NET-GRACE active, let probes decide)")
+                        return
+                    }
                     AppLog.i("NetworkObserver", "capabilities changed, online=$hasInternet")
                     _isOnline.value = hasInternet
                 }
@@ -344,6 +455,9 @@ class NetworkObserver(private val context: Context) {
     /** Снятие регистрации. Вызывать при остановке приложения. */
     fun unregister() {
         if (!registered.compareAndSet(true, false)) return
+        // #NET-GRACE: отменяем pending grace — приложение стопится, ждать 3с бессмысленно.
+        offlineGraceJob?.cancel()
+        offlineGraceJob = null
         val connectivityManager = cm ?: return
         val cb = callback ?: return
         try {

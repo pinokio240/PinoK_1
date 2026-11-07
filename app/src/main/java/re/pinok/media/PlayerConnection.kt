@@ -955,6 +955,15 @@ object PlayerConnection {
      * (online=true всегда делает prepare+seekTo), но в логе видно какой сценарий
      * сработал — удобно для отладки зависаний плеера.
      *
+     * #NET-GRACE: теперь prepare() вызывается ТОЛЬКО когда он реально нужен:
+     *  - forceReprepare=true (явный запрос — legacy случай, сейчас НЕ используется
+     *    после правки SovaApp.registerGlobalNetworkWatcher, оставлен для backlog).
+     *  - ИЛИ ctrl.playbackState == Player.STATE_IDLE (плеер упал с ошибкой и ждёт
+     *    восстановления сети чтобы переподготовиться).
+     * Если плеер BUFFERING/READY — НЕ трогаем: ExoPlayer сам ретраит упавший сегмент
+     * на новом интерфейсе (OkHttpDataSource следует за default route), prepare()
+     * тут лишь порвал бы HLS-стрим и вызвал needless ребуфер.
+     *
      * Вызывается из [re.pinok.SovaApp.registerGlobalNetworkWatcher].
      */
     fun onNetworkChanged(online: Boolean, forceReprepare: Boolean = false) {
@@ -973,7 +982,22 @@ object PlayerConnection {
                 return
             }
             val reason = if (forceReprepare) "default-network-switch" else "offline-restored"
-            AppLog.i(TAG, "Network restored ($reason) — re-preparing player for track #${track.id}")
+            // #NET-GRACE: готовим плеер ТОЛЬКО если явно просят (forceReprepare) ИЛИ плеер
+            // в STATE_IDLE (упал с ошибкой и ждёт восстановления). Если BUFFERING/READY —
+            // не трогаем: ExoPlayer сам ретраит сегмент, prepare() лишь порвёт стрим.
+            val stateName = when (ctrl.playbackState) {
+                Player.STATE_IDLE -> "IDLE"
+                Player.STATE_BUFFERING -> "BUFFERING"
+                Player.STATE_READY -> "READY"
+                Player.STATE_ENDED -> "ENDED"
+                else -> "UNKNOWN(${ctrl.playbackState})"
+            }
+            val needsPrepare = forceReprepare || ctrl.playbackState == Player.STATE_IDLE
+            if (!needsPrepare) {
+                AppLog.i(TAG, "Network restored ($reason) — player state=$stateName, skip prepare (#NET-GRACE: let ExoPlayer self-recover segment loads)")
+                return
+            }
+            AppLog.i(TAG, "Network restored ($reason) — re-preparing player for track #${track.id} (state=$stateName)")
             try {
                 // Сохраняем позицию — prepare() сбрасывает в 0 без неё.
                 val pos = ctrl.currentPosition
@@ -1516,15 +1540,34 @@ object PlayerConnection {
             val local = if (track != null) TrackDownloadManager.isDownloaded(track.id) else false
             AppLog.i(TAG, "onPlaybackStateChanged → $stateName | track=#${track?.id ?: -1} local=$local pos=${ctrl.currentPosition}ms dur=${ctrl.duration}ms")
             // Fix #178: BUFFERING watchdog — запускаем при входе в BUFFERING,
-            // отменяем при любом другом state. Срабатывает через 30s если плеер
-            // всё ещё BUFFERING → force reprepare (см. bufferingWatchdogJob).
+            // отменяем при любом другом state. Раньше срабатывал через 9с (в
+            // docstring было написано 30с — баг несоответствия). Теперь 15с — это
+            // даёт время #NET-GRACE (3с в NetworkObserver) + ребуфер (12с запас).
+            // #NET-GRACE: перед force-prepare проверяем реальную сеть. Если оффлайн
+            // — prepare бессмысленен (всё равно упадёт), ждём восстановления сети
+            // (onNetworkChanged сработает когда grace вернёт онлайн).
             bufferingWatchdogJob?.cancel()
             if (playbackState == Player.STATE_BUFFERING) {
                 bufferingWatchdogJob = scope.launch {
-                    delay(9_000L)
+                    delay(15_000L)  // #NET-GRACE: 15с (было 9с) — даём время grace+ребуфер
                     val c = controller ?: return@launch
                     if (c.playbackState == Player.STATE_BUFFERING) {
-                        AppLog.w(TAG, "BUFFERING watchdog: 9s timeout — force reprepare (track=#${track?.id ?: -1})")
+                        // #NET-GRACE: перед force-prepare проверим реальную сеть. Если оффлайн —
+                        // prepare бессмысленен (всё равно упадёт), ждём восстановления.
+                        // Если SovaApp/networkObserver недоступен (edge case на раннем старте) —
+                        // считаем онлайн (старое поведение: prepare без проверки).
+                        val online = try {
+                            re.pinok.SovaApp.getOrNull()?.networkObserver
+                                ?.hasRealInternetDeferred(2_000) ?: true
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            // watchdog отменён (state сменился на READY/IDLE) — не продолжаем.
+                            throw ce
+                        } catch (_: Exception) { true }
+                        if (!online) {
+                            AppLog.w(TAG, "BUFFERING watchdog: 15s timeout but OFFLINE — skip prepare, waiting for network restore (#NET-GRACE)")
+                            return@launch
+                        }
+                        AppLog.w(TAG, "BUFFERING watchdog: 15s timeout, online — force reprepare (track=#${track?.id ?: -1})")
                         try {
                             val pos = c.currentPosition.coerceAtLeast(0L)
                             c.prepare()
@@ -1611,6 +1654,53 @@ object PlayerConnection {
                 AppLog.e(TAG, "ONLINE ERROR details: track=#${track.id} url=${track.url?.take(80)}")
             }
             AppLog.e(TAG, "ERROR cause: ${error.cause?.javaClass?.simpleName}: ${error.cause?.message}")
+
+            // #NET-GRACE: IO-ошибка → retry вместо немедленного error-UI / local-cache fallback.
+            //
+            // При кратковременной потере сети ExoPlayer кидает ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+            // / _TIMEOUT / _UNSPECIFIED. Раньше это сразу шло в local-cache fallback (если есть кэш)
+            // или в PARSING-skip + error-баннер. Но локальный кэш переключает MediaItem — это рвёт
+            // HLS-стрим, и при восстановлении сети плеер НЕ возвращается к онлайн-URL (остаётся на
+            // локальном). А если кэша нет — error-баннер + skip на следующий трек.
+            //
+            // Теперь: до 3 retry с задержкой 1.5с + prepare()+seekTo(pos). ExoPlayer сам ретраит
+            // загрузку сегмента на восстановившемся интерфейсе. Сеть за 1.5с × 3 = 4.5с успевает
+            // вернуться (grace 3с в NetworkObserver + запас). Только после 3 неудач → fall through
+            // к существующей логике (local-cache / PARSING-skip / error-баннер).
+            //
+            // consecutivePlayerErrors сбрасывается в 0 при STATE_READY (успешное воспроизведение).
+            val isIoNetworkError = error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+                error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_UNSPECIFIED
+            if (isIoNetworkError && track != null && consecutivePlayerErrors < 3) {
+                consecutivePlayerErrors++
+                val attempt = consecutivePlayerErrors
+                val posMs = try { controller?.currentPosition ?: _playerState.value.positionMs } catch (_: Exception) { 0L }
+                AppLog.w(TAG, "#NET-GRACE: IO network error (code=${error.errorCode} ${error.errorCodeName}) — retry $attempt/3 after 1.5s (track=#${track.id}, pos=${posMs}ms, NO local-cache fallback yet)")
+                scope.launch {
+                    delay(1_500L)
+                    withController { ctrl ->
+                        try {
+                            ctrl.prepare()
+                            if (posMs > 1000L) {
+                                try { ctrl.seekTo(posMs) } catch (_: Exception) {}
+                            }
+                            ctrl.playWhenReady = true
+                            AppLog.i(TAG, "#NET-GRACE: retry $attempt/3 applied — prepare()+seekTo($posMs) (track=#${track.id})")
+                        } catch (e: Exception) {
+                            AppLog.w(TAG, "#NET-GRACE: retry $attempt/3 failed: ${e.message}")
+                        }
+                    }
+                }
+                // НЕ пробрасываем error в UI во время retry — пользователь не должен видеть
+                // баннер на транзиентной ошибке. UI остаётся в текущем состоянии (BUFFERING).
+                // Если все 3 retry упадут — следующий onPlayerError дойдёт до fallback'а ниже
+                // и там error будет показан.
+                return
+            }
+            if (isIoNetworkError && track != null) {
+                AppLog.w(TAG, "#NET-GRACE: IO network error — 3 retries exhausted, falling through to local-cache/skip/error logic (track=#${track.id})")
+            }
 
             // Fix #233 (P0): при ЛЮБОЙ ошибке воспроизведения (не только PARSING_*)
             // — если есть локальный кэш, переключаемся на него. Раньше при

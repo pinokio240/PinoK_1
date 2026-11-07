@@ -944,6 +944,15 @@ fun VideoPlayerScreen(
     // пересоздан → 400 → fresh…". Сбрасывается при STATE_READY.
     var http400FreshAttempts by remember { mutableIntStateOf(0) }
 
+    // #NET-GRACE: счётчик IO-network-error retry для видео. ExoPlayer кидает
+    // ERROR_CODE_IO_NETWORK_CONNECTION_FAILED / _TIMEOUT / _UNSPECIFIED при
+    // кратковременной потере сети. Вместо немедленного retryWithFreshUrl (sync
+    // API call который тоже падает при offline) — короткая задержка + prepare()+
+    // seekTo(pos). ExoPlayer сам ретраит сегмент на восстановившемся интерфейсе.
+    // 2 retry × 1.5с = 3с (синхрон с grace в NetworkObserver). Сбрасывается при
+    // STATE_READY. После 2 неудач → fall through к retryWithFreshUrl / error UI.
+    var ioRetryCount by remember(resolvedVideo) { mutableIntStateOf(0) }
+
     // FIX: player URL от VK — это HTML-страница (video_ext.php), а не прямой видеофайл.
     // ExoPlayer не может воспроизвести HTML. Используем player URL ТОЛЬКО как
     // абсолютный last-resort, и только если нет прямой .mp4/.m3u8 ссылки.
@@ -1182,6 +1191,12 @@ fun VideoPlayerScreen(
                             // Обрабатываем как HTTP 400: свежий video.get → перебор formatFallbackUrls.
                             val isMalformedManifest = error.errorCode ==
                                 PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED
+                            // #NET-GRACE: IO network error (TCP reset / connect failed / timeout)
+                            // — кратковременная потеря сети. Обрабатываем grace-retry (prepare+seekTo),
+                            // НЕ retryWithFreshUrl (который делает sync API call и падает при offline).
+                            val isIoNetworkErrorVideo = error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                                error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
+                                error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
                             if (retryCount >= 5) {
                                 playerError = "Не удалось воспроизвести видео (кодек не поддерживается)"
                             } else if (isDecodingFailed) {
@@ -1383,6 +1398,37 @@ fun VideoPlayerScreen(
                                         retryWithFreshUrl()
                                     }
                                 }
+                            } else if (isIoNetworkErrorVideo && ioRetryCount < 2) {
+                                // #NET-GRACE: IO network error (TCP/reset/timeout) → grace retry
+                                // через prepare()+seekTo(pos), НЕ retryWithFreshUrl (sync API call
+                                // падает при offline и блокирует UI). ExoPlayer сам ретраит сегмент
+                                // на восстановившемся интерфейсе. 2 retry × 1.5с = 3с (синхрон с
+                                // grace в NetworkObserver). После 2 неудач → fall through к else
+                                // (retryWithFreshUrl / error UI).
+                                ioRetryCount += 1
+                                val attempt = ioRetryCount
+                                val savedPosition = self.currentPosition.coerceAtLeast(0L)
+                                val savedSpeed = self.playbackParameters.speed
+                                AppLog.w(TAG, "#NET-GRACE: video IO network error (code=${error.errorCode} ${error.errorCodeName}) — retry $attempt/2 after 1.5s (no fresh fetch, pos=$savedPosition)")
+                                playerError = "Сетевая ошибка — восстановление…"
+                                isSwitchingQuality = false
+                                scope.launch {
+                                    try {
+                                        kotlinx.coroutines.delay(1_500L)
+                                        self.prepare()
+                                        if (savedPosition > 1_000L) {
+                                            try { self.seekTo(savedPosition) } catch (_: Exception) {}
+                                        }
+                                        self.setPlaybackSpeed(savedSpeed)
+                                        AppLog.i(TAG, "#NET-GRACE: video retry $attempt/2 applied — prepare()+seekTo($savedPosition)")
+                                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                                        // Compose scope cancelled (user navigated away / video changed) —
+                                        // не логируем как failure, просто выходим.
+                                        throw ce
+                                    } catch (e: Exception) {
+                                        AppLog.w(TAG, "#NET-GRACE: video retry $attempt/2 failed: ${e.message}")
+                                    }
+                                }
                             } else {
                                 playerError = "Ошибка видео: ${error.errorCodeName}. Повторная попытка…"
                                 retryWithFreshUrl()
@@ -1401,6 +1447,10 @@ fun VideoPlayerScreen(
                                 // свежих video.get на ошибку. Следующий 400 в этой сессии
                                 // снова получит один свежий fetch, а не уйдёт сразу в fallback.
                                 http400FreshAttempts = 0
+                                // #NET-GRACE: успешное воспроизведение — сбрасываем счётчик
+                                // IO-network retry. Следующая транзиентная ошибка снова получит
+                                // 2 grace-попытки.
+                                ioRetryCount = 0
                             }
                         }
 

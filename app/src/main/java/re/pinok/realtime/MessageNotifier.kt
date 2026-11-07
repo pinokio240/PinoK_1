@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.LocusId
 import re.pinok.ui.MainActivity
 import re.pinok.R
 import re.pinok.util.AppLog
@@ -40,6 +41,12 @@ object MessageNotifier {
     const val CHANNEL_COMMUNITIES = "communities"
     const val CHANNEL_COMMUNITIES_NOVIB = "communities_novib"
     const val CHANNEL_COMMUNITIES_SILENT = "communities_silent"
+    // #MSG-PRIORITY: приоритетный канал личных сообщений — обходит DND (setBypassDnd).
+    // Новый ID (не `messages`) нужен т.к. каналы Android 8+ иммутабельны после создания:
+    // у существующих юзеров `messages` уже создан без bypassDnd, добавить его нельзя.
+    // Через messages_priority направляются личные DM когда включена настройка
+    // messagesHighPriority (default true) — сообщения всегда всплывают, даже в DND.
+    const val CHANNEL_MESSAGES_PRIORITY = "messages_priority"
 
     private const val CHANNEL_NAME = "Сообщения"
     private const val NOTIFICATION_ID_BASE = 1000
@@ -123,6 +130,23 @@ object MessageNotifier {
             }
             nm.createNotificationChannel(silentChannel)
 
+            // #MSG-PRIORITY: приоритетный канал личных сообщений.
+            // IMPORTANCE_HIGH (heads-up + звук) + setBypassDnd(true) — сообщения
+            // всплывают и звучат даже в режиме «Не беспокоить» (DND). Сравните:
+            // vk_security_alerts тоже bypassDnd (VkNotificationsNotifier:193),
+            // обычные messages/communities — нет. Звук/вибрация/light включены.
+            val priorityChannel = NotificationChannel(
+                CHANNEL_MESSAGES_PRIORITY,
+                "Сообщения (высокий приоритет)",
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = "Личные сообщения — обход режима «Не беспокоить» (всегда со звуком и всплывающим баннером)"
+                enableVibration(true)
+                enableLights(true)
+                setBypassDnd(true)
+            }
+            nm.createNotificationChannel(priorityChannel)
+
             // Fix #390 #NOTIFY-MODES: каналы сообществ. Отдельные от "messages",
             // чтобы юзер мог отключить ТОЛЬКО звук/вибрацию от сообществ, не трогая
             // сообщения (параметры notifyCommunitiesSound/Vibration выбирают канал).
@@ -160,7 +184,7 @@ object MessageNotifier {
             }
             nm.createNotificationChannel(communitiesSilentChannel)
 
-            AppLog.i(TAG, "Notification channels created: $CHANNEL_MESSAGES, $CHANNEL_MESSAGES_SILENT, $CHANNEL_COMMUNITIES, $CHANNEL_COMMUNITIES_NOVIB, $CHANNEL_COMMUNITIES_SILENT")
+            AppLog.i(TAG, "Notification channels created: $CHANNEL_MESSAGES, $CHANNEL_MESSAGES_SILENT, $CHANNEL_MESSAGES_PRIORITY, $CHANNEL_COMMUNITIES, $CHANNEL_COMMUNITIES_NOVIB, $CHANNEL_COMMUNITIES_SILENT")
         }
     }
 
@@ -263,6 +287,14 @@ object MessageNotifier {
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                // #MSG-PRIORITY: setOnlyAlertOnce — при обновлении существующего уведомления
+                // (новое сообщение в том же диалоге) не проигрывать звук/вибрацию повторно.
+                .setOnlyAlertOnce(true)
+                // #MSG-PRIORITY: Android 11+ conversation ranking — связываем уведомление
+                // с разговором по shortcutId/locusId. Система ранжирует такие уведомления
+                // выше социальных/новостей в шторке и поддерживает «Priority conversations».
+                .setShortcutId(peerId.toString())
+                .setLocusId(LocusId("chat_$peerId"))
                 // #NOTIF-FEED-FILTER (19-B/19-E, волна 18-δ): диалоговые уведомления —
                 // ВЫШЕ новостных в шторке. setSortKey сортирует внутри одного пакета
                 // при равной важности: диалогам "0" (MessageNotifier), новостным "1"
@@ -279,7 +311,9 @@ object MessageNotifier {
                 // так получает ОДНО уведомление (NOTIFICATION_ID_BASE + peerId.hashCode
                 // — обновляется на месте), grouping был не нужен и только вредил.
                 .setColor(0xFF4A76A8.toInt())  // VK brand blue (для акцента в shade)
-                .setColorized(false)
+                // #MSG-PRIORITY: colorized=true — характерный фон для messaging-уведомлений
+                // (Android подсвечивает сообщения цветом, отделяя от прочих типов).
+                .setColorized(true)
                 .build()
 
             val nm = NotificationManagerCompat.from(ctx)

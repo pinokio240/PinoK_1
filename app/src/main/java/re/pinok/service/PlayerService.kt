@@ -365,6 +365,13 @@ class PlayerService : MediaSessionService() {
             .setLoadControl(
                 DefaultLoadControl.Builder()
                     .setBufferDurationsMs(30_000, 120_000, 2_500, 5_000)
+                    // #NET-GRACE: 30с back-buffer (паритет с VideoPlayerConfig) — при кратковременном
+                    // обрыве сети аудио продолжает играть из back-buffer без паузы. ExoPlayer держит
+                    // последние 30с воспроизведённого медиа в памяти. В сочетании с grace-периодом
+                    // в NetworkObserver (3с/2 пробы) — 200мс Wi-Fi blip полностью незаметен.
+                    // Параметр retainBackBufferFromReset=true оставлен false: при seek/prepare() back-buffer
+                    // сбрасывается (нужно для корректного seekTo после network-restore).
+                    .setBackBuffer(30_000, false)
                     .build()
             )
 

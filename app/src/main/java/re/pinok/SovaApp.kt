@@ -1896,6 +1896,13 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         // отправителя + настройкам звука/вибрации сообществ.
                         // Канал определяет heads-up/звук/вибрацию на уровне системы
                         // (см. MessageNotifier.init); prefs внутрь нотифаера не тянем.
+                        //
+                        // #MSG-PRIORITY: личные DM с messagesHighPriority → приоритетный
+                        // канал (setBypassDnd). Сообщества и Тихий режим (mode 3) этот
+                        // флаг НЕ трогают — mode 3 остаётся авторитетным «беззвучным»
+                        // выбором юзера, сообщества имеют свои каналы ниже.
+                        val dmHighPriority = !isCommunity && snap.messagesHighPriority
+
                         val pushChannelId = when {
                             // Тихий режим: сообщения всплывают, но беззвучно.
                             mode == SovaPrefs.NOTIFY_MODE_SILENT &&
@@ -1908,8 +1915,12 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                             isCommunity && !snap.notifyCommunitiesVibration ->
                                 re.pinok.realtime.MessageNotifier.CHANNEL_COMMUNITIES_NOVIB
                             isCommunity -> re.pinok.realtime.MessageNotifier.CHANNEL_COMMUNITIES
-                            // Сообщения (режимы 0 и 1): прежний канал со звуком.
-                            else -> re.pinok.realtime.MessageNotifier.CHANNEL_MESSAGES
+                            // Сообщения (режимы 0 и 1): прежний канал со звуком, либо
+                            // #MSG-PRIORITY messages_priority (bypassDnd) когда включена
+                            // настройка messagesHighPriority.
+                            else -> if (dmHighPriority)
+                                re.pinok.realtime.MessageNotifier.CHANNEL_MESSAGES_PRIORITY
+                                else re.pinok.realtime.MessageNotifier.CHANNEL_MESSAGES
                         }
 
                         // P0.2 #QUIET-MSGS + P0.3 #SERVER-DND: тихое окно (22:00→08:00
@@ -1932,16 +1943,32 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
                         val inQuietHours = snap.pushQuietHoursEnabled &&
                             re.pinok.realtime.VkNotificationsNotifier.isInQuietHours(snap)
                         val inServerDnd = snap.silentUntil > 0L && snap.silentUntil > nowSec
-                        val effectiveChannelId = if (inQuietHours || inServerDnd) {
+                        // #MSG-PRIORITY: для личных DM с messagesHighPriority НЕ применяем
+                        // quiet-hours/server-DND silent-downgrade — приоритетный канал
+                        // messages_priority обходит DND по дизайну (setBypassDnd=true),
+                        // поэтому сообщения всегда всплывают со звуком. Сообщества и обычные
+                        // сообщения (флаг выключен) продолжают сапрессаться как раньше.
+                        val suppressSound = (inQuietHours || inServerDnd) && !dmHighPriority
+                        val effectiveChannelId = if (suppressSound) {
                             val reason = if (inQuietHours) "quiet_hours" else "server_dnd"
                             AppLog.d("SovaApp",
                                 "startMessageNotifier: sound suppressed ($reason) " +
                                     "peer=${event.peerId} quietEnabled=${snap.pushQuietHoursEnabled} " +
                                     "silentUntil=${snap.silentUntil} now=$nowSec " +
-                                    "isCommunity=$isCommunity mode=$mode")
+                                    "isCommunity=$isCommunity mode=$mode " +
+                                    "dmHighPriority=$dmHighPriority")
                             if (isCommunity) re.pinok.realtime.MessageNotifier.CHANNEL_COMMUNITIES_SILENT
                             else re.pinok.realtime.MessageNotifier.CHANNEL_MESSAGES_SILENT
                         } else {
+                            // #MSG-PRIORITY: dmHighPriority → остаётся на messages_priority
+                            // даже в quiet-hours/server-DND (bypassDnd); иначе — выбранный
+                            // выше pushChannelId.
+                            if (dmHighPriority && (inQuietHours || inServerDnd)) {
+                                AppLog.d("SovaApp",
+                                    "startMessageNotifier: #MSG-PRIORITY bypass " +
+                                        "(dmHighPriority=true) — keep messages_priority " +
+                                        "peer=${event.peerId}")
+                            }
                             pushChannelId
                         }
 
@@ -3252,8 +3279,13 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     private fun registerGlobalNetworkWatcher() {
         // Полная потеря сети — жёсткий reset (evictAll + cancelAll).
         // Срабатывает ТОЛЬКО когда checkOnline() == false (см. NetworkObserver.onLost).
+        //
+        // #NET-GRACE: теперь этот listener вызывается НЕ мгновенно на onLost, а только
+        // после 3с/2-probe grace в NetworkObserver (см. NetworkObserver.startOfflineGrace).
+        // Это значит cancelAll() рвёт OkHttp calls ТОЛЬКО при настоящем offline — 200мс
+        // Wi-Fi blip больше не убивает in-flight HLS-сегменты ExoPlayer.
         networkObserver.addOnNetworkLostListener {
-            AppLog.w("SovaApp", "Network FULLY lost — evicting OkHttp pool + cancelling in-flight calls (global)")
+            AppLog.w("SovaApp", "Network FULLY lost (post-#NET-GRACE: 3s/2-probe expired) — evicting OkHttp pool + cancelling in-flight calls (global)")
             try { httpClient.connectionPool.evictAll() } catch (_: Exception) {}
             try { httpClient.dispatcher.cancelAll() } catch (_: Exception) {}
             try { re.pinok.media.PlayerConnection.onNetworkChanged(online = false) } catch (_: Exception) {}
@@ -3272,7 +3304,11 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             try { httpClient.connectionPool.evictAll() } catch (_: Exception) {}
             // #AUTO-OFFLINE-REMOVAL (W41): resetNetworkErrorCounter/clearAutoOffline
             // убраны вместе с авто-офлайном #38.
-            try { re.pinok.media.PlayerConnection.onNetworkChanged(online = true, forceReprepare = true) } catch (_: Exception) {}
+            // #NET-GRACE: БЕЗ forceReprepare — смена default route (Wi-Fi↔mobile) не означает
+            // потерю стрима. ExoPlayer сам ретраит упавший сегмент на новом интерфейсе.
+            // prepare() тут рвал бы HLS и вызывал ребуфер. forceReprepare оставлен только
+            // для случая когда плеер реально в STATE_IDLE (ошибка) — см. PlayerConnection.
+            try { re.pinok.media.PlayerConnection.onNetworkChanged(online = true, forceReprepare = false) } catch (_: Exception) {}
 
             // #VKID-SEAMLESS (vk.id.md P0-5): PROACTIVE silent refresh на смене сети.
             // Раньше refresh запускался ТОЛЬКО реактивно — когда следующий API-вызов
