@@ -44,8 +44,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -53,6 +55,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +63,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Search
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
@@ -179,6 +184,19 @@ fun AttachmentPickerSheet(
     }
     var activeTab by remember { mutableStateOf(startTab) }
 
+    // #ATTACH-SEARCH: единая поисковая строка, переиспользуемая табами Music/Video/Docs.
+    // Query живёт в родителе и пробрасывается вниз → persists при переключении табов
+    // (юзер ищет «beatles» в Музыке → переключается на Видео → видит beatles-видео).
+    // Табы Photos/Gifts поиск не поддерживают (визуальные сетки без текста) → строка
+    // для них скрывается, query при этом НЕ сбрасывается (чтобы при возврате на Music
+    // сохранялся контекст поиска). Каждый таб решает сам как реагировать на query:
+    //  - Music/Video: серверный поиск (audio.search / video.search) с пагинацией.
+    //  - Docs: локальная фильтрация загруженного списка (VK deprecated docs.search).
+    var searchQuery by remember { mutableStateOf("") }
+    val tabSupportsSearch = activeTab == AttachmentPickerTab.Music ||
+        activeTab == AttachmentPickerTab.Video ||
+        activeTab == AttachmentPickerTab.Docs
+
     // MULTI-SELECT-ATTACH: накопленные выборы до тапа «Готово».
     // Гетерогенный список — типы вкладок разные (Track/Video/GiftItem/…),
     // оборачиваем в sealed PendingPick с уникальным ключом (dedup по key).
@@ -254,6 +272,17 @@ fun AttachmentPickerSheet(
                 )
             }
 
+            // #ATTACH-SEARCH: единая поисковая строка над табами — показывается только
+            // для табов, поддерживающих поиск (Music/Video/Docs). Для Photos/Gifts скрыта.
+            // Query хранится в родителе → persists при переключении табов.
+            if (tabSupportsSearch) {
+                AttachmentSearchField(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                )
+            }
+
             PrimaryTabRow(selectedTabIndex = tabs.indexOf(activeTab).coerceAtLeast(0)) {
                 // forEach (не items!) — PrimaryTabRow не Lazy-контейнер (Fix #284).
                 for (tab in tabs) {
@@ -269,6 +298,8 @@ fun AttachmentPickerSheet(
             when (activeTab) {
                 AttachmentPickerTab.Music -> AudioPickerTab(
                     app = app,
+                    // #ATTACH-SEARCH: серверный поиск audio.search при непустом query.
+                    searchQuery = searchQuery,
                     onPick = { track ->
                         // MULTI-SELECT-ATTACH: tap toggles selection; в legacy — pick+dismiss.
                         if (multiSelect) {
@@ -282,6 +313,9 @@ fun AttachmentPickerSheet(
                 )
                 AttachmentPickerTab.Video -> VideoPickerTab(
                     app = app,
+                    // #ATTACH-SEARCH: серверный поиск video.search при непустом query
+                    // (глобальный, без albumId — альбомы скрыты в режиме поиска).
+                    searchQuery = searchQuery,
                     onPick = { video ->
                         if (multiSelect) {
                             toggle(PendingPick.Video(video))
@@ -318,6 +352,9 @@ fun AttachmentPickerSheet(
                 )
                 AttachmentPickerTab.Docs -> DocsPickerTab(
                     app = app,
+                    // #ATTACH-SEARCH: локальная фильтрация по title/ext (VK deprecated
+                    // docs.search). Фильтр накладывается на загруженный список.
+                    searchQuery = searchQuery,
                     onPick = { att, title ->
                         if (multiSelect) {
                             toggle(PendingPick.Doc(att, title))
@@ -364,6 +401,37 @@ private sealed interface PendingPick {
     }
 }
 
+/**
+ * #ATTACH-SEARCH: единая переиспользуемая поисковая строка для табов пикера
+ * (Music/Video/Docs). Стиль — паритет с CommunityScreen: OutlinedTextField +
+ * leading Search-иконка + trailing Close-кнопка (очистка). singleLine.
+ *
+ * Query хранится ВЫЗЫВАЮЩЕЙ стороной (родителем AttachmentPickerSheet) и
+ * пробрасывается вниз → persists при переключении табов.
+ */
+@Composable
+private fun AttachmentSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = modifier,
+        placeholder = { Text("Поиск…") },
+        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }) {
+                    Icon(Icons.Filled.Close, contentDescription = "Очистить")
+                }
+            }
+        },
+        singleLine = true,
+    )
+}
+
 /** Заголовок таба (switch-выражение вместо when по Int — #ATTACH-UNIFY). */
 private fun tabTitle(tab: AttachmentPickerTab): String = when (tab) {
     AttachmentPickerTab.Music -> "Музыка"
@@ -394,20 +462,64 @@ private fun tabIcon(tab: AttachmentPickerTab) = when (tab) {
 private fun AudioPickerTab(
     app: SovaApp,
     onPick: (Track) -> Unit,
+    // #ATTACH-SEARCH: серверный поиск audio.search при непустом query.
+    // Пустой query → режим просмотра библиотеки (audioGetWithCount).
+    searchQuery: String = "",
     // MULTI-SELECT-ATTACH: overlay с галочкой + выделение цветом.
     multiSelect: Boolean = false,
     selectedKeys: Set<String> = emptySet(),
 ) {
+    // --- Режим просмотра (audio.get) ---
     var tracks by remember { mutableStateOf<List<Track>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var serverOffset by remember { mutableStateOf(0) }
     var hasMore by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
+
+    // --- Режим поиска (audio.search) — отдельный стейт, чтобы не смешивать ---
+    // #ATTACH-SEARCH: при непустом query рендерим searchResults вместо tracks.
+    // Пагинация своя (searchOffset/searchHasMore) — нельзя мешать с browse-стейтом.
+    var searchResults by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var searchLoading by remember { mutableStateOf(false) }
+    var searchError by remember { mutableStateOf<String?>(null) }
+    var searchOffset by remember { mutableStateOf(0) }
+    var searchHasMore by remember { mutableStateOf(false) }
+    var searchLoadingMore by remember { mutableStateOf(false) }
+
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
+    val isSearching = searchQuery.isNotBlank()
+
     fun loadMore() {
+        // #ATTACH-SEARCH: ветвление по режиму — поиск vs просмотр.
+        if (isSearching) {
+            if (searchLoadingMore || searchLoading || !searchHasMore) return
+            val currentQuery = searchQuery
+            scope.launch {
+                searchLoadingMore = true
+                try {
+                    val (total, page) = app.apiClient.audioSearch(
+                        query = currentQuery, count = 50, offset = searchOffset,
+                    )
+                    // Race-guard: запрос шёл, а query успел смениться — выбрасываем.
+                    if (searchQuery != currentQuery) return@launch
+                    searchOffset += page.size
+                    val fresh = page
+                        .filter { it.id > 0L && it.ownerId != 0L }
+                        .filter { nv -> searchResults.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                    searchResults = (searchResults + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+                    searchHasMore = page.isNotEmpty() || total < 0
+                } catch (e: Exception) {
+                    AppLog.e("AudioPicker", "search load more failed: ${e.message}")
+                } finally {
+                    searchLoadingMore = false
+                }
+            }
+            return
+        }
+        // --- browse-режим (прежняя логика) ---
         if (loadingMore || loading || !hasMore) return
         scope.launch {
             loadingMore = true
@@ -429,6 +541,7 @@ private fun AudioPickerTab(
         }
     }
 
+    // Загрузка библиотеки — один раз (browse-режим). Не перезапускается при поиске.
     LaunchedEffect(Unit) {
         loading = true
         try {
@@ -446,7 +559,37 @@ private fun AudioPickerTab(
         }
     }
 
-    // Автодогрузка при скролле к концу списка.
+    // #ATTACH-SEARCH: серверный поиск — перезапускается при смене query.
+    // Пустой query → сбрасываем searchResults (возврат в browse-режим).
+    LaunchedEffect(searchQuery) {
+        if (!isSearching) {
+            searchResults = emptyList()
+            searchError = null
+            searchHasMore = false
+            return@LaunchedEffect
+        }
+        searchLoading = true
+        searchError = null
+        searchResults = emptyList()
+        searchOffset = 0
+        searchHasMore = false
+        try {
+            val (total, page) = app.apiClient.audioSearch(query = searchQuery, count = 50, offset = 0)
+            searchResults = page
+                .filter { it.id > 0L && it.ownerId != 0L }
+                .distinctBy { "${it.ownerId}_${it.id}" }
+            searchOffset = page.size
+            searchHasMore = page.isNotEmpty() || total < 0
+        } catch (e: Exception) {
+            AppLog.e("AudioPicker", "search failed", e)
+            searchError = e.message
+        } finally {
+            searchLoading = false
+        }
+    }
+
+    // Автодогрузка при скролле к концу списка (работает в обоих режимах —
+    // loadMore сам ветвит по isSearching).
     LaunchedEffect(listState) {
         snapshotFlow {
             val info = listState.layoutInfo
@@ -458,18 +601,27 @@ private fun AudioPickerTab(
             .collect { if (it > 0) loadMore() }
     }
 
+    // #ATTACH-SEARCH: выбор отображаемого списка + стейтов в зависимости от режима.
+    val displayTracks = if (isSearching) searchResults else tracks
+    val displayLoading = if (isSearching) searchLoading else loading
+    val displayError = if (isSearching) searchError else error
+    val displayHasMore = if (isSearching) searchHasMore else hasMore
+
     when {
-        loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        displayLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
         }
-        error != null -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Text("Не удалось загрузить: $error", color = MaterialTheme.colorScheme.error)
+        displayError != null -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Text("Не удалось загрузить: $displayError", color = MaterialTheme.colorScheme.error)
         }
-        tracks.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Text("Библиотека пуста", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        displayTracks.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Text(
+                text = if (isSearching) "Ничего не найдено" else "Библиотека пуста",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
-            items(tracks, key = { "${it.ownerId}_${it.id}" }) { track ->
+            items(displayTracks, key = { "${it.ownerId}_${it.id}" }) { track ->
                 // MULTI-SELECT-ATTACH: ключ для дедупа совпадает с PendingPick.Audio.key.
                 val key = "audio_${track.ownerId}_${track.id}"
                 AudioTrackRow(
@@ -479,7 +631,7 @@ private fun AudioPickerTab(
                     isSelected = selectedKeys.contains(key),
                 )
             }
-            if (hasMore) {
+            if (displayHasMore) {
                 item(key = "audio_picker_more") {
                     Box(
                         modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -578,6 +730,9 @@ private fun AudioTrackRow(
 private fun VideoPickerTab(
     app: SovaApp,
     onPick: (Video) -> Unit,
+    // #ATTACH-SEARCH: серверный поиск video.search при непустом query (глобальный,
+    // без albumId). В режиме поиска альбомы и back-row скрыты — только результаты.
+    searchQuery: String = "",
     // MULTI-SELECT-ATTACH: overlay с галочкой + выделение цветом.
     multiSelect: Boolean = false,
     selectedKeys: Set<String> = emptySet(),
@@ -591,6 +746,7 @@ private fun VideoPickerTab(
     // меняет openedAlbum → LaunchedEffect(openedAlbum) перезагружает список.
     var openedAlbum by remember { mutableStateOf<VideoAlbum?>(null) }
 
+    // --- Режим просмотра (video.get) ---
     var videos by remember { mutableStateOf<List<Video>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -598,8 +754,21 @@ private fun VideoPickerTab(
     var serverOffset by remember { mutableStateOf(0) }
     var hasMore by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
+
+    // --- Режим поиска (video.search) — отдельный стейт ---
+    // #ATTACH-SEARCH: глобальный поиск (search_global=1 внутри videoSearch),
+    // без albumId. Альбомы/back-row скрыты — только плоский список результатов.
+    var searchResults by remember { mutableStateOf<List<Video>>(emptyList()) }
+    var searchLoading by remember { mutableStateOf(false) }
+    var searchError by remember { mutableStateOf<String?>(null) }
+    var searchOffset by remember { mutableStateOf(0) }
+    var searchHasMore by remember { mutableStateOf(false) }
+    var searchLoadingMore by remember { mutableStateOf(false) }
+
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    val isSearching = searchQuery.isNotBlank()
 
     // Загрузка альбомов — один раз при входе в таб (video.getAlbums).
     // Не блокирует видео: videoGetWithCount грузится параллельно в эффекте ниже.
@@ -617,6 +786,32 @@ private fun VideoPickerTab(
     }
 
     fun loadMore() {
+        // #ATTACH-SEARCH: ветвление по режиму — поиск vs просмотр.
+        if (isSearching) {
+            if (searchLoadingMore || searchLoading || !searchHasMore) return
+            val currentQuery = searchQuery
+            scope.launch {
+                searchLoadingMore = true
+                try {
+                    val page = app.apiClient.videoSearch(
+                        query = currentQuery, count = 50, offset = searchOffset,
+                    )
+                    if (searchQuery != currentQuery) return@launch
+                    searchOffset += page.size
+                    val fresh = page
+                        .filter { it.id > 0L && it.ownerId != 0L }
+                        .filter { nv -> searchResults.none { it.ownerId == nv.ownerId && it.id == nv.id } }
+                    searchResults = (searchResults + fresh).distinctBy { "${it.ownerId}_${it.id}" }
+                    searchHasMore = page.size >= 50
+                } catch (e: Exception) {
+                    AppLog.e("VideoPicker", "search load more failed: ${e.message}")
+                } finally {
+                    searchLoadingMore = false
+                }
+            }
+            return
+        }
+        // --- browse-режим (прежняя логика) ---
         if (loadingMore || loading || !hasMore) return
         // Capture в локальный val — открытие другого альбома во время загрузки
         // не должно подмешать «чужую» страницу в текущий список.
@@ -687,7 +882,37 @@ private fun VideoPickerTab(
         }
     }
 
-    // ATTACH-PICKER-ALBUMS: автодогрузка при скролле к концу списка.
+    // #ATTACH-SEARCH: серверный поиск — перезапускается при смене query.
+    // Пустой query → сбрасываем searchResults (возврат в browse-режим).
+    LaunchedEffect(searchQuery) {
+        if (!isSearching) {
+            searchResults = emptyList()
+            searchError = null
+            searchHasMore = false
+            return@LaunchedEffect
+        }
+        searchLoading = true
+        searchError = null
+        searchResults = emptyList()
+        searchOffset = 0
+        searchHasMore = false
+        try {
+            val page = app.apiClient.videoSearch(query = searchQuery, count = 50, offset = 0)
+            searchResults = page
+                .filter { it.id > 0L && it.ownerId != 0L }
+                .distinctBy { "${it.ownerId}_${it.id}" }
+            searchOffset = page.size
+            searchHasMore = page.size >= 50
+        } catch (e: Exception) {
+            AppLog.e("VideoPicker", "search failed", e)
+            searchError = e.message
+        } finally {
+            searchLoading = false
+        }
+    }
+
+    // ATTACH-PICKER-ALBUMS: автодогрузка при скролле к концу списка (работает
+    // в обоих режимах — loadMore сам ветвит по isSearching).
     LaunchedEffect(listState) {
         snapshotFlow {
             val info = listState.layoutInfo
@@ -699,6 +924,44 @@ private fun VideoPickerTab(
             .collect { if (it > 0) loadMore() }
     }
 
+    // ── #ATTACH-SEARCH: режим поиска — отдельный рендер (без альбомов/back-row).
+    if (isSearching) {
+        when {
+            searchLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            searchError != null -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                Text("Не удалось найти: $searchError", color = MaterialTheme.colorScheme.error)
+            }
+            searchResults.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                Text("Ничего не найдено", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
+                items(searchResults, key = { "${it.ownerId}_${it.id}" }) { video ->
+                    val key = "video_${video.ownerId}_${video.id}"
+                    VideoRow(
+                        video = video,
+                        onClick = { onPick(video) },
+                        multiSelect = multiSelect,
+                        isSelected = selectedKeys.contains(key),
+                    )
+                }
+                if (searchHasMore) {
+                    item(key = "video_picker_search_more") {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    // ── Режим просмотра (прежняя логика с альбомами) ──
     when {
         // Первичная загрузка (нет ещё ни видео, ни альбомов) — полный экран-заглушка.
         loading && videos.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1459,6 +1722,10 @@ private fun parseVkPhotoRef(photo: JsonObject): VkPhotoRef? {
 private fun DocsPickerTab(
     app: SovaApp,
     onPick: (attachment: String, title: String) -> Unit,
+    // #ATTACH-SEARCH: локальная фильтрация по title/ext (VK deprecated docs.search).
+    // Фильтр накладывается на загруженный список — догрузка страниц продолжает работать
+    // (фильтрация применяется поверх растущего пула).
+    searchQuery: String = "",
     // MULTI-SELECT-ATTACH: overlay с галочкой + выделение цветом.
     multiSelect: Boolean = false,
     selectedKeys: Set<String> = emptySet(),
@@ -1472,6 +1739,21 @@ private fun DocsPickerTab(
     var loadingMore by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // #ATTACH-SEARCH: локальная фильтрация по title/ext (case-insensitive).
+    // derivedStateOf — пересчёт только при смене docs или searchQuery.
+    val isSearching = searchQuery.isNotBlank()
+    val displayDocs by remember(isSearching) {
+        derivedStateOf {
+            if (!isSearching) docs
+            else {
+                val q = searchQuery.trim().lowercase()
+                docs.filter {
+                    it.title.lowercase().contains(q) || it.ext.lowercase().contains(q)
+                }
+            }
+        }
+    }
 
     fun loadMore() {
         if (loadingMore || loading || !hasMore) return
@@ -1533,11 +1815,14 @@ private fun DocsPickerTab(
         error != null -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             Text("Не удалось загрузить: $error", color = MaterialTheme.colorScheme.error)
         }
-        docs.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Text("Нет документов", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        displayDocs.isEmpty() -> Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Text(
+                text = if (isSearching) "Ничего не найдено" else "Нет документов",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         else -> LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
-            items(docs, key = { "${it.ownerId}_${it.id}" }) { doc ->
+            items(displayDocs, key = { "${it.ownerId}_${it.id}" }) { doc ->
                 // MULTI-SELECT-ATTACH: ключ совпадает с PendingPick.Doc.key.
                 val att = buildVkAttachment("doc", doc.ownerId, doc.id, doc.accessKey)
                 val key = "doc_$att"
