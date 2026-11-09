@@ -8,7 +8,6 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.app.LocusId
 import re.pinok.ui.MainActivity
 import re.pinok.R
 import re.pinok.util.AppLog
@@ -291,10 +290,12 @@ object MessageNotifier {
                 // (новое сообщение в том же диалоге) не проигрывать звук/вибрацию повторно.
                 .setOnlyAlertOnce(true)
                 // #MSG-PRIORITY: Android 11+ conversation ranking — связываем уведомление
-                // с разговором по shortcutId/locusId. Система ранжирует такие уведомления
-                // выше социальных/новостей в шторке и поддерживает «Priority conversations».
+                // с разговором по shortcutId. Система ранжирует такие уведомления выше
+                // социальных/новостей в шторке и поддерживает «Priority conversations».
+                // (setLocusId убран: androidx.core.app.LocusId недоступен в разрешённой
+                // версии core-ktx; shortcutId достаточно — он неявно задаёт locus для
+                // ranking, отдельный LocusId избыточен.)
                 .setShortcutId(peerId.toString())
-                .setLocusId(LocusId("chat_$peerId"))
                 // #NOTIF-FEED-FILTER (19-B/19-E, волна 18-δ): диалоговые уведомления —
                 // ВЫШЕ новостных в шторке. setSortKey сортирует внутри одного пакета
                 // при равной важности: диалогам "0" (MessageNotifier), новостным "1"
