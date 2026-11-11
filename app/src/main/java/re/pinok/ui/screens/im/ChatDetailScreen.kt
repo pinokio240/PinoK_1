@@ -951,10 +951,9 @@ fun ChatDetailScreen(
         // мы ничего не делаем (старый flow).
     }
 
-    // P3.5: multi-file upload — выбор до 10 фото за раз (PickMultipleVisualMedia).
-    val multiFileEnabled by app.prefs.data
-        .map { it.msgMultiFile }
-        .collectAsState(initial = true)
+    // #MULTI-PHOTO-FIX: multiFileEnabled/gate убран — multi-picker всегда используется
+    // для «Фото» (прежний gate лишал пользователя выбора нескольких фото). Настройка
+    // msgMultiFile в SovaPrefs оставлена для обратной совместимости, но больше не гейтит UI.
     // P3.6: dual send/mic button — state machine (EDIT/LOADING/LIMIT/MIC/SUBMIT).
     val dualButtonEnabled by app.prefs.data
         .map { it.msgDualButton }
@@ -1573,19 +1572,10 @@ fun ChatDetailScreen(
         }
     }
 
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
-    ) { uri ->
-        // Fix #234 (multi-photo preview): НЕ отправляем фото сразу при выборе.
-        // Добавляем в pendingPhotos → над полем ввода появится миниатюра.
-        // Send кнопка загрузит и отправит батч.
-        // Fix #235: оборачиваем Uri в PendingPhoto(id, uri) — уникальный id для
-        // стабильного ключа LazyRow (раньше ключ дублировался → crash).
-        uri ?: return@rememberLauncherForActivityResult
-        pendingPhotos = (pendingPhotos + PendingPhoto(nextPendingPhotoId(), uri)).take(10)
-    }
     // Fix #234 (multi-photo preview): multi-photo picker — до 10 фото за раз.
     // НЕ отправляем сразу, добавляем все URI в pendingPhotos для предпросмотра.
+    // #MULTI-PHOTO-FIX: всегда multi-picker (прежний single-picker + gate msgMultiFile
+    // убран — пользователь не мог выбрать несколько фото за раз, отправлялось одно).
     val multiPhotoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 10),
     ) { uris ->
@@ -2936,12 +2926,18 @@ fun ChatDetailScreen(
                     app.suppressAuthRelaunchFor(120_000L)
                     val attachments = mutableListOf<String>()
                     var authFailed = false
+                    // #MULTI-PHOTO-FIX: отслеживаем фото, которые НЕ загрузились
+                    // (upload вернул null не из-за auth-сбоя). Раньше они тихо
+                    // пропускались → пользователь не знал, что часть фото потеряна,
+                    // и видел «отправилось только одно». Теперь: восстанавливаем
+                    // failedPhotos в pending + показываем «N отправлено, M не удалось».
+                    val failedPhotos = mutableListOf<PendingPhoto>()
                     // MULTI-SELECT-ATTACH: VK-вложения (фото/видео/аудио/документы из
                     // библиотеки) уже готовы как attachment-строки (upload не нужен) —
                     // добавляем в начало списка, дальше дозагружаются фото/файлы с устройства.
                     attachments += vkAtts.map { it.att }
                     // PHOTO-BATCH: сначала фото — photos-путь (uploadPhotoForMessage).
-                    for (p in photos) {
+                    for ((photoIdx, p) in photos.withIndex()) {
                         val uri = p.uri
                         // Копируем URI в temp-файл (photos-сервер multipart требует File).
                         val inFile = kotlin.io.path.createTempFile(
@@ -2953,7 +2949,8 @@ fun ChatDetailScreen(
                             ctx.contentResolver.openInputStream(uri)?.use { ins ->
                                 inFile.outputStream().use { out -> ins.copyTo(out) }
                             } ?: run {
-                                AppLog.w("ChatDetailScreen", "batch photo: cannot open stream for $uri — skip")
+                                AppLog.w("ChatDetailScreen", "batch photo: cannot open stream for $uri — tracked as failed")
+                                failedPhotos += p
                                 continue
                             }
                             val att = app.apiClient.uploadPhotoForMessage(peerId, inFile, "image/*")
@@ -2968,9 +2965,23 @@ fun ChatDetailScreen(
                                     scope.launch { showSessionExpiredDialog = true }
                                     break
                                 }
+                                // #MULTI-PHOTO-FIX: НЕ тихо пропускаем — запоминаем фото
+                                // для восстановления в pending + user-visible message ниже.
+                                // VK upload/save может падать на rapid-вызовах (#2..N):
+                                // delay(300) между итерациями ниже митигирует rate-limit.
+                                AppLog.w("ChatDetailScreen", "batch photo: upload failed for $uri — tracked for restore")
+                                failedPhotos += p
                             }
                         } finally {
                             inFile.delete()
+                        }
+                        // #MULTI-PHOTO-FIX: пауза 300мс между загрузками фото.
+                        // VK rate-limit'ит rapid consecutive photos.saveMessagesPhoto —
+                        // без задержки фото #2..N тихо падают и пользователь видит
+                        // «отправилось только одно». 300мс достаточно для VK (нативный
+                        // клиент делает паузу); 10 фото = +2.7с к загрузке — незаметно.
+                        if (photoIdx < photos.lastIndex && !authFailed) {
+                            kotlinx.coroutines.delay(300L)
                         }
                     }
                     // FILE-BATCH: затем файлы — photos/docs/video-пути.
@@ -3020,6 +3031,16 @@ fun ChatDetailScreen(
                             AppLog.i("ChatDetailScreen", "batch sent: ${attachments.size} attachments (msgId=$msgId)")
                             pfiles.forEach { it.file.delete() }
                             reloadMessages()
+                            // #MULTI-PHOTO-FIX: partial success — часть фото не загрузилась.
+                            // Раньше они тихо терялись (пользователь видел «отправилось
+                            // только одно» без объяснений). Теперь восстанавливаем failedPhotos
+                            // в pending + показываем сколько удалось/не удалось.
+                            if (failedPhotos.isNotEmpty()) {
+                                pendingPhotos = failedPhotos
+                                val okCount = photos.size - failedPhotos.size
+                                errorText = "Отправлено $okCount из ${photos.size} фото. ${failedPhotos.size} не удалось — нажмите «Отправить» для повтора"
+                                AppLog.w("ChatDetailScreen", "#MULTI-PHOTO-FIX: partial success — ${failedPhotos.size}/${photos.size} photos failed, restored to pending")
+                            }
                         } else {
                             AppLog.w("ChatDetailScreen", "batch send failed (msgId=$msgId)")
                             errorText = "Не удалось отправить вложения"
@@ -4682,11 +4703,10 @@ fun ChatDetailScreen(
                                 onDismissRequest = { showAttachMenu = false },
                                 onPhoto = {
                                     val req = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    if (multiFileEnabled) {
-                                        multiPhotoPickerLauncher.launch(req)
-                                    } else {
-                                        photoPickerLauncher.launch(req)
-                                    }
+                                    // #MULTI-PHOTO-FIX: всегда multi-picker — прежний gate
+                                    // (if multiFileEnabled) лишал пользователя возможности
+                                    // выбрать несколько фото за раз; отправлялось одно.
+                                    multiPhotoPickerLauncher.launch(req)
                                 },
                                 onCamera = {
                                     val permission = Manifest.permission.CAMERA
