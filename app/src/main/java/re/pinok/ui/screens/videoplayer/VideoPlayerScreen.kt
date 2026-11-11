@@ -1336,10 +1336,13 @@ fun VideoPlayerScreen(
             // LiveConfig — #VIDEO-ADAPTIVE-KEY, #VIDEO-HLS-AUTOPROMO, #VIDEO-LIVE).
             // Остальные — через buildEpisodeMediaItem (упрощённый билд из files).
             // В режиме одиночного видео — listOf(один MediaItem) (прежнее поведение).
-            val seriesPlaylist = playlist
-            val mediaItems: List<MediaItem> = if (isSeriesMode && seriesPlaylist != null) {
+            // #VIDEO-SERIES: isSeriesMode = !playlist.isNullOrEmpty() → внутри
+            // if (isSeriesMode) playlist смарт-кастится к non-null List<Video>
+            // (контракт isNullOrEmpty { returns(false) implies (this != null) }).
+            // Лишний seriesPlaylist-копия и `!= null`-чек убраны (были always-true).
+            val mediaItems: List<MediaItem> = if (isSeriesMode) {
                 val startItem = mediaItemBuilder.build()
-                seriesPlaylist.mapIndexed { idx, v ->
+                playlist.mapIndexed { idx, v ->
                     if (idx == startIndex) startItem
                     else buildEpisodeMediaItem(v) ?: startItem
                 }
@@ -2383,7 +2386,7 @@ fun VideoPlayerScreen(
                                     .padding(horizontal = 6.dp, vertical = 2.dp),
                             ) {
                                 Text(
-                                    "Эпизод ${currentEpisodeIndex + 1} / ${playlist?.size ?: 1}",
+                                    "Эпизод ${currentEpisodeIndex + 1} / ${playlist.size}",
                                     color = VK_WHITE, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
                                 )
                             }
@@ -2951,7 +2954,7 @@ fun VideoPlayerScreen(
                                                 VKControlButton(
                                                     icon = Icons.Filled.SkipNext,
                                                     contentDescription = "Следующий эпизод",
-                                                    enabled = currentEpisodeIndex < (playlist?.size ?: 1) - 1,
+                                                    enabled = currentEpisodeIndex < playlist.size - 1,
                                                     onClick = { exoPlayer.seekToNext() },
                                                 )
                                             }
