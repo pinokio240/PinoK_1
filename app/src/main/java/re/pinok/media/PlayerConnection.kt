@@ -545,8 +545,14 @@ object PlayerConnection {
                         try {
                             val fresh = re.pinok.SovaApp.getOrNull()?.apiClient
                                 ?.audioGetById(origStart)
-                            if (fresh != null && !fresh.url.isNullOrBlank() &&
-                                !fresh.url.contains("audio_api_unavailable", ignoreCase = true)
+                            // Smart-cast fix: fresh.url — public property из другого модуля
+                            // (core/data), компилятор не может смарт-кастить его к non-null
+                            // после isNullOrBlank(). Захватываем в локальный val freshUrl —
+                            // контракт isNullOrBlank() { returns(false) implies (this != null) }
+                            // работает для локальных val → freshUrl.contains(...) компилируется.
+                            val freshUrl = fresh?.url
+                            if (fresh != null && !freshUrl.isNullOrBlank() &&
+                                !freshUrl.contains("audio_api_unavailable", ignoreCase = true)
                             ) {
                                 AppLog.i(TAG, "#AUDIO-INTRO-FIX preemptive: fresh URL obtained for #${origStart.id} — replacing in playlist before prepareQueue")
                                 workingTracks = tracks.map { if (it.id == origStart.id) fresh else it }
