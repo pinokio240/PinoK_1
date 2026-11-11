@@ -76,6 +76,9 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+// #VIDEO-SERIES: иконки next/prev эпизода в плейлисте альбома (базовые Material).
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 // Fix #383 #COMMUNITY-VIDEO-PARITY: иконки действий (комментарии/поделиться).
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -390,6 +393,40 @@ private fun formatFallbackUrls(files: Map<String, String>?): List<Pair<String, S
 
 private val PLAYBACK_RATES = listOf(0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
+// #VIDEO-SERIES: строит MediaItem для НЕ-стартового эпизода плейлиста по его files.
+// В отличие от стартового (где работает полная логика selectedHls/qualityOptions/
+// selectedQualityIndex/adaptiveEntry + #VIDEO-HLS-AUTOPROMO + #VIDEO-ADAPTIVE-KEY),
+// здесь упрощённый путь — берём высший доступный mp4_* (по VideoQuality.ORDER,
+// 2160→1440→…→144), иначе первый адаптивный URL из ADAPTIVE_FALLBACK_KEYS.
+// MIME вычисляется по КЛЮЧУ через mimeFor (#VIDEO-DASH-MIMEBYKEY) — точный DASH/HLS
+// даже для VK CDN URL с query-only типом. LiveConfiguration для isLive==1 (#VIDEO-LIVE).
+// Если files пуст/null → null (вызывающий код использует fallback на стартовый MediaItem,
+// тогда переход даст ошибку — юзер жмёт SkipNext, это известная v1-разрядность).
+private fun buildEpisodeMediaItem(v: re.pinok.data.model.Video): MediaItem? {
+    val files = v.files
+    if (files.isNullOrEmpty()) return null
+    // Высший доступный mp4_* по VideoQuality.ORDER (2160 → … → 144).
+    val mp4Entry = VideoQuality.ORDER.firstNotNullOfOrNull { (key, _) ->
+        val url = files[key]
+        if (!url.isNullOrBlank()) key to url else null
+    }
+    // Иначе первый адаптивный (HLS/DASH) — по ADAPTIVE_FALLBACK_KEYS.
+    val entry = mp4Entry ?: firstAdaptiveEntry(files) ?: return null
+    val (key, url) = entry
+    val builder = MediaItem.Builder().setUri(Uri.parse(url))
+    // #VIDEO-DASH-MIMEBYKEY: MIME по ключу (точный DASH/HLS), не по URL.
+    mimeFor(key, url)?.let { builder.setMimeType(it) }
+    // #VIDEO-LIVE: live-эпизодам задаём LiveConfiguration (как стартовому).
+    if (v.isLiveClip) {
+        builder.setLiveConfiguration(
+            MediaItem.LiveConfiguration.Builder()
+                .setTargetOffsetMs(3_000L)
+                .build()
+        )
+    }
+    return builder.build()
+}
+
 // #VIDEO-QUALITY-TEMPLATE: порядок/метки качеств и логика выбора индекса вынесены
 // в единый [re.pinok.data.model.VideoQuality] (§52.2.4, «общие паттерны») —
 // раньше здесь были private QUALITY_ORDER + computeInitialQualityIndex, которые
@@ -440,6 +477,14 @@ fun VideoPlayerScreen(
     onBack: () -> Unit,
     // FIX-B: клик по имени автора комментария → UserProfile (из VideoPlatformRouter/SovaNavHost).
     onUserClick: (Long) -> Unit = {},
+    // #VIDEO-SERIES: список эпизодов альбома + стартовый индекс. null/empty =
+    // одиночное видео (прежнее поведение — setMediaItem на один MediaItem).
+    // При непустом списке: ExoPlayer.setMediaItems(playlist, startIndex, 0) →
+    // next/prev UI + авто-переход эпизодов + overlay «Эпизод N/M».
+    // Стартовый эпизод резолвится через videoGetById как обычно (LaunchedEffect),
+    // остальные строятся по их files (with_files=1 в video.get альбома наполнил их).
+    playlist: List<Video>? = null,
+    startIndex: Int = 0,
 ) {
     val context = LocalContext.current
     val app = SovaApp.get()
@@ -458,6 +503,12 @@ fun VideoPlayerScreen(
     var fetchError by remember(video) { mutableStateOf<String?>(null) }
     var playerError by remember { mutableStateOf<String?>(null) }
     var retryCount by remember { mutableIntStateOf(0) }
+    // #VIDEO-TRAILER-FALLBACK (Step 4): true когда играем trailer (copyright-
+    // restricted видео, VK отдал только files["trailer"]). Показываем бейдж «Трейлер»
+    // в заголовке. Ключ `video` (не resolvedVideo) — сбрасывается при открытии
+    // нового видео, не переживает пересоздание плеера после fresh-resolve (трейлер
+    // — терминальный fallback, после него не ждём обновления files).
+    var isPlayingTrailer by remember(video) { mutableStateOf(false) }
     // OK-IMPL-1 (Stage 3b): метаданные OK-видео, извлечённые через OkVideoRepository.
     // null если видео не OK или метаданные не получены (fallback на WebView / video.get).
     var okMetadata by remember(video) { mutableStateOf<OkVideoRepository.OkVideoMetadata?>(null) }
@@ -471,6 +522,19 @@ fun VideoPlayerScreen(
     // video.get → resolvedVideo=fresh → restart → video.get). Сбрасывается только
     // при открытии нового видео (новый `video` → remember() заново).
     var freshResolveAttempted by remember(video) { mutableStateOf(false) }
+
+    // #VIDEO-SERIES: режим альбома — playlist передан из VideoScreen (drill-down
+    // альбома). true → ExoPlayer создаётся с setMediaItems (плейлист), видны
+    // next/prev кнопки + overlay «Эпизод N/M». false (null/empty playlist) →
+    // прежнее поведение: setMediaItem на одно видео.
+    val isSeriesMode = !playlist.isNullOrEmpty()
+    // #VIDEO-SERIES: индекс текущего эпизода в плейлисте. Стартует со startIndex
+    // (видео, по которому тапнули), обновляется в onMediaItemTransition (ExoPlayer
+    // авто-переходит на следующий эпизод при STATE_ENDED). Гейтит enabled-состояние
+    // кнопок SkipPrevious (index > 0) / SkipNext (index < size-1) и feedит overlay.
+    var currentEpisodeIndex by remember(video) {
+        mutableIntStateOf(startIndex.coerceIn(0, (playlist?.size ?: 1) - 1))
+    }
 
     // ── Fix #383 #COMMUNITY-VIDEO-PARITY ──
     // Состояние лайка поднято на уровень экрана: ОДИН источник правды для
@@ -832,7 +896,25 @@ fun VideoPlayerScreen(
                 // fallback (#338) попытается, лучше чем "No video URL — ExoPlayer
                 // not created". Если есть HLS — ExoPlayer создастся с HLS (строка
                 // ниже по коду: qualityOptions.getOrNull(idx)?.url ?: hls_ondemand).
-                if (filtered.isEmpty()) allOptions else filtered
+                val baseOptions = if (filtered.isEmpty()) allOptions else filtered
+                // #VIDEO-HLS-AUTOPROMO (Step 2b): длинные VK-видео (movies/lectures,
+                // >30min) иногда отдаются ТОЛЬКО адаптивным манифестом (hls_ondemand /
+                // dash_webm) без прогрессивных mp4_*. Раньше qualityOptions = empty →
+                // currentQualityUrl fallback на firstAdaptiveUrl(files) (URL без ключа)
+                // → mimeFor(null, url) = null для VK CDN URL (тип манифеста спрятан в
+                // query) → ERROR_CODE_PARSING_MANIFEST_MALFORMED. Теперь добавляем
+                // единственный пункт «Авто» с реальным ключом из firstAdaptiveEntry,
+                // чтобы mimeFor получил точный MIME (M3U8/MPD) по КЛЮЧУ files.
+                if (baseOptions.isEmpty()) {
+                    val adaptiveEntry = firstAdaptiveEntry(files)
+                    if (adaptiveEntry != null) {
+                        listOf(QualityOption(adaptiveEntry.first, "Авто", adaptiveEntry.second))
+                    } else {
+                        emptyList()
+                    }
+                } else {
+                    baseOptions
+                }
             }
         }
     }
@@ -900,8 +982,15 @@ fun VideoPlayerScreen(
     // но меню качества должно открываться, чтобы пользователь видел выбранный
     // формат (и в теории мог вернуться к нему). Для обычных видео — как раньше
     // (нужно ≥2 качества, иначе селектор бессмысленен).
+    // #VIDEO-SERIES: в режиме плейлиста qualityOptions построены для СТАРТОВОГО
+    // эпизода (по resolvedVideo.files). На НЕ-стартовом эпизоде эти опции НЕ
+    // соответствуют текущему видео → прячем селектор, иначе switchQuality
+    // подставит URL от чужого видео и сломает воспроизведение. На стартовом
+    // эпизоде селектор видим — switchQuality корректно заменит стартовый MediaItem
+    // через replaceMediaItem (см. switchQuality ниже — сохраняет плейлист).
     val showQualitySelector =
-        (!isLocalPlayback) && (qualityOptions.size >= 2 || (resolvedVideo.isClip && qualityOptions.isNotEmpty()))
+        (!isLocalPlayback) && (qualityOptions.size >= 2 || (resolvedVideo.isClip && qualityOptions.isNotEmpty())) &&
+            !(isSeriesMode && currentEpisodeIndex != startIndex)
 
     // Fix #337: после DECODING_FAILED fallback selectedQualityIndex оставался на
     // упавшем (HEVC) качестве → меню качества подсвечивало нерабочий пункт, а
@@ -932,7 +1021,33 @@ fun VideoPlayerScreen(
         }
     }
     val hlsOption = hlsUrl?.let { QualityOption("hls", "Авто", it) }
-    var selectedHls by remember(resolvedVideo) { mutableStateOf(false) }
+    // #VIDEO-HLS-AUTOPROMO (Step 2a): для длинных VK-видео (movies/lectures, >30min)
+    // VK часто отдаёт только низкие прогрессивные mp4 (240/360), а 720/1080 живут
+    // ВНУТРИ HLS master-плейлиста. Если пользователь pinned качество выше
+    // максимального доступного mp4 И есть настоящий m3u8 — стартуем сразу с HLS:
+    // ExoPlayer ABR выберет нужный rendition в мастер-плейлисте. Без этого
+    // пользователь с pinned "1080" получал mp4_360 (макс прогрессивный). Решение
+    // использует СУЩЕСТВУЮЩИЙ механизм selectedHls/hlsOption («Авто» в меню) —
+    // не дублируем пункт в qualityOptions, а просто делаем его выбранным по умолчанию.
+    val hlsAutoPromoActive = if (hlsUrl == null ||
+        effectiveQuality == "auto" || effectiveQuality.isBlank()) {
+        false
+    } else {
+        val prefInt = effectiveQuality.toIntOrNull() ?: 0
+        if (prefInt <= 0) {
+            false
+        } else {
+            // Высшая доступная mp4-высота из qualityOptions (ключи вида mp4_XXX).
+            val highestMp4 = qualityOptions.mapNotNull { opt ->
+                opt.key.substringAfter("_").toIntOrNull()
+            }.maxOrNull() ?: 0
+            // Auto-promo только если pinned выше max mp4 — тогда HLS master содержит
+            // rendition-ы выше, чем любой прогрессивный mp4. Если pinned ≤ max mp4,
+            // VideoQuality.selectIndex выбрал нужный mp4 — HLS не нужен.
+            prefInt > highestMp4
+        }
+    }
+    var selectedHls by remember(resolvedVideo) { mutableStateOf(hlsAutoPromoActive) }
     // #CLIP-HLS-DASH-START: счётчик fallback-форматов при HTTP 400 у клипов.
     // Нужен, чтобы при повторном 400 переходить к СЛЕДУЮЩЕМУ формату, а не
     // бесконечно перезагружать один и тот же. Сбрасывается при STATE_READY.
@@ -979,23 +1094,72 @@ fun VideoPlayerScreen(
         // Не создаём плеер пока ждём video.get с прямыми URL
         null
     } else {
-        qualityOptions.getOrNull(selectedQualityIndex)?.url
-            // OK-IMPL-1 (Stage 3b): fallback на OK HLS если нет прямых mp4.
-            ?: okHlsForFallback
-            ?: run {
-                val files = resolvedVideo.files
-                firstAdaptiveUrl(files)
-            }
-            ?: playerUrlDirect
+        // #VIDEO-HLS-AUTOPROMO (Step 2a): selectedHls=true (auto-promo или ручной
+        // выбор «Авто» в меню) — играем настоящий HLS m3u8 URL.
+        if (selectedHls && hlsUrl != null) {
+            hlsUrl
+        } else {
+            qualityOptions.getOrNull(selectedQualityIndex)?.url
+                // OK-IMPL-1 (Stage 3b): fallback на OK HLS если нет прямых mp4.
+                ?: okHlsForFallback
+                ?: run {
+                    val files = resolvedVideo.files
+                    // #VIDEO-ADAPTIVE-KEY (Step 3): firstAdaptiveEntry возвращает
+                    // Pair(key, url) — ключ нужен mimeFor для точного MIME (M3U8/MPD)
+                    // даже для VK CDN URL, где тип манифеста спрятан в query-params.
+                    firstAdaptiveEntry(files)?.second
+                }
+                ?: playerUrlDirect
+        }
     }
 
     var isSwitchingQuality by remember { mutableStateOf(false) }
 
     LaunchedEffect(video) { retryCount = 0 }
 
-    fun retryWithFreshUrl() {
+    fun retryWithFreshUrl(player: ExoPlayer? = null) {
+        // #VIDEO-SERIES: в режиме плейлиста retryWithFreshUrl ломает серию —
+        // `resolvedVideo = fresh` пересоздаёт ExoPlayer (через remember(resolvedVideo))
+        // и setMediaItem на один MediaItem вместо setMediaItems → плейлист теряется.
+        // Для НЕ-стартового эпизода не делаем свежий video.get — показываем ошибку,
+        // юзер жмёт SkipNext/SkipPrevious. Стартовый эпизод обрабатываем как обычно
+        // (его fresh files подменяют ТОЛЬКО стартовый MediaItem через пересоздание
+        // плеера с тем же startIndex — плейлист rebuild'ится в remember-блоке).
+        if (isSeriesMode && player != null && player.currentMediaItemIndex != startIndex) {
+            playerError = "Эпизод недоступен — переключитесь на следующий"
+            AppLog.w(TAG, "#VIDEO-SERIES: skip retryWithFreshUrl for non-start episode (idx=${player.currentMediaItemIndex}, start=$startIndex) — playlist would be destroyed")
+            return
+        }
         if (retryCount >= 3) {
-            playerError = "Не удалось воспроизвести видео после 3 попыток"
+            // #VIDEO-TRAILER-FALLBACK (Step 4): retryWithFreshUrl исчерпан (3 попытки
+            // свежего video.get). Пробуем trailer URL (copyright-restricted видео, VK
+            // отдаёт только 30s files["trailer"]) перед сдачей — пользователь увидит
+            // превью вместо чёрного экрана. isPlayingTrailer защищает от повторного
+            // входа (если трейлер тоже упадёт — не уходим в цикл «трейлер → ошибка»).
+            val trailerUrl = resolvedVideo.files?.get("trailer")
+            if (player != null && trailerUrl != null && trailerUrl.isNotBlank() && !isPlayingTrailer) {
+                playerError = "Видео недоступно. Воспроизводим трейлер…"
+                isPlayingTrailer = true
+                AppLog.i(TAG, "#VIDEO-TRAILER-FALLBACK: playing trailer for video #${resolvedVideo.id} (retries exhausted)")
+                scope.launch {
+                    kotlinx.coroutines.delay(500L)
+                    try {
+                        val trailerUri = Uri.parse(trailerUrl)
+                        val trailerMediaItem = MediaItem.Builder()
+                            .setUri(trailerUri)
+                            .apply { mimeFor(null, trailerUrl)?.let { setMimeType(it) } }
+                            .build()
+                        player.setMediaItem(trailerMediaItem)
+                        player.prepare()
+                        player.playWhenReady = true
+                    } catch (e: Exception) {
+                        AppLog.w(TAG, "#VIDEO-TRAILER-FALLBACK: trailer playback failed: ${e.message}")
+                        playerError = "Не удалось воспроизвести видео"
+                    }
+                }
+            } else {
+                playerError = "Не удалось воспроизвести видео после 3 попыток"
+            }
             return
         }
         retryCount++
@@ -1070,8 +1234,17 @@ fun VideoPlayerScreen(
                 VideoPlaybackBus.clearLivePlayer(bgReuseKey)
             }
         }
+        // #VIDEO-ADAPTIVE-KEY (Step 3): кэшируем firstAdaptiveEntry один раз —
+        // используется и для URL fallback, и для MIME-ключа (mimeFor по реальному
+        // ключу dash_webm/hls_ondemand/... для VK CDN URL с query-only типом).
+        val adaptiveEntry = firstAdaptiveEntry(resolvedVideo.files)
         val url = if (isLocalPlayback) {
             "file://${localFile.absolutePath}"
+        } else if (selectedHls && hlsUrl != null) {
+            // #VIDEO-HLS-AUTOPROMO (Step 2a): selectedHls=true (auto-promo для
+            // длинных видео или ручной выбор «Авто») — стартуем с настоящего HLS
+            // m3u8. MIME будет APPLICATION_M3U8 (mimeFor("hls", url) ниже).
+            hlsUrl
         } else {
             // P0.31 #VIDEO-NO-PLAYER-URL (2026-10): убран resolvedVideo.player из
             // fallback chain. VK player URL (okcdn.ru/video_ext.php) НЕ playable
@@ -1082,10 +1255,7 @@ fun VideoPlayerScreen(
             // qualityOptions заполнятся mp4_* → ExoPlayer создастся с рабочим URL.
             qualityOptions.getOrNull(selectedQualityIndex)?.url
                 ?: okHlsForFallback
-                ?: run {
-                    val files = resolvedVideo.files
-                    firstAdaptiveUrl(files)
-                }
+                ?: adaptiveEntry?.second
             // P0.31: убран ?: resolvedVideo.player?.takeIf { !isHtmlEmbedUrl(it) }
             // VK player URL (okcdn) проходит isHtmlEmbedUrl=false, но всё равно 403.
         }
@@ -1097,7 +1267,27 @@ fun VideoPlayerScreen(
             val mediaItemBuilder = MediaItem.Builder().setUri(uri)
             // #VIDEO-DASH-MIMEBYKEY: MIME по КЛЮЧУ выбранной опции (клипы → точный
             // DASH/HLS тип), а не только по URL. mp4_* → null (прогрессив без MIME).
-            mimeFor(qualityOptions.getOrNull(selectedQualityIndex)?.key, url)?.let { mediaItemBuilder.setMimeType(it) }
+            // #VIDEO-HLS-AUTOPROMO: при selectedHls → ключ "hls" → APPLICATION_M3U8.
+            // #VIDEO-ADAPTIVE-KEY (Step 3): при fallback на firstAdaptiveEntry →
+            // реальный ключ (dash_webm/hls_ondemand/...) → точный MIME даже для VK
+            // CDN URL, где тип манифеста спрятан в query-params (не в pathname).
+            val mimeKey: String? = when {
+                isLocalPlayback -> null
+                selectedHls && hlsUrl != null -> "hls"
+                else -> qualityOptions.getOrNull(selectedQualityIndex)?.key ?: adaptiveEntry?.first
+            }
+            mimeFor(mimeKey, url)?.let { mediaItemBuilder.setMimeType(it) }
+            // #VIDEO-LIVE (Step 5): для live-стримов задаём LiveConfiguration —
+            // ExoPlayer корректно обрабатывает sliding window и target offset.
+            // VK live = isLive==1 (Video.isLiveClip). Без этого ExoPlayer может
+            // стартовать с начала окна вместо live-edge.
+            if (resolvedVideo.isLiveClip) {
+                mediaItemBuilder.setLiveConfiguration(
+                    MediaItem.LiveConfiguration.Builder()
+                        .setTargetOffsetMs(3_000L)
+                        .build()
+                )
+            }
             val vkUa = VkUserAgent.get(context.applicationContext as android.app.Application)
             // #37: DefaultHttpDataSource.Factory() умеет ТОЛЬКО http:// и https://.
             // Для локальных file:// URI (скачанные видео) нужен DefaultDataSource.Factory
@@ -1140,6 +1330,22 @@ fun VideoPlayerScreen(
                     .setDefaultRequestProperties(refererProps)
             }
             val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
+            // #VIDEO-SERIES: в режиме плейлиста строим List<MediaItem> для всех
+            // эпизодов альбома. Стартовый (idx==startIndex) использует уже построенный
+            // mediaItemBuilder (со всей логикой selectedHls/qualityOptions/mimeFor/
+            // LiveConfig — #VIDEO-ADAPTIVE-KEY, #VIDEO-HLS-AUTOPROMO, #VIDEO-LIVE).
+            // Остальные — через buildEpisodeMediaItem (упрощённый билд из files).
+            // В режиме одиночного видео — listOf(один MediaItem) (прежнее поведение).
+            val seriesPlaylist = playlist
+            val mediaItems: List<MediaItem> = if (isSeriesMode && seriesPlaylist != null) {
+                val startItem = mediaItemBuilder.build()
+                seriesPlaylist.mapIndexed { idx, v ->
+                    if (idx == startIndex) startItem
+                    else buildEpisodeMediaItem(v) ?: startItem
+                }
+            } else {
+                listOf(mediaItemBuilder.build())
+            }
             ExoPlayer.Builder(context)
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
                 // #VIDEO-NET (2026-10-02): увеличенный буфер под сеть — реже
@@ -1160,7 +1366,14 @@ fun VideoPlayerScreen(
                     // CPU уснуть для докачки сетевого потока.
                     setHandleAudioBecomingNoisy(false)
                     setWakeMode(VideoPlayerConfig.WAKE_MODE_NETWORK)
-                    setMediaItem(mediaItemBuilder.build())
+                    // #VIDEO-SERIES: setMediaItems для плейлиста (старт с startIndex,
+                    // позиция 0 — позицию восстановит LaunchedEffect ниже из
+                    // PlaybackPositionStore), setMediaItem для одиночного видео.
+                    if (mediaItems.size > 1) {
+                        setMediaItems(mediaItems, startIndex.coerceIn(0, mediaItems.lastIndex), 0L)
+                    } else {
+                        setMediaItem(mediaItems[0])
+                    }
                     prepare()
                     // #VIDEO-AUTOPLAY: по умолчанию true (автостарт при открытии).
                     // При false — плеер готов, но ждёт нажатия play.
@@ -1198,7 +1411,41 @@ fun VideoPlayerScreen(
                                 error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ||
                                 error.errorCode == PlaybackException.ERROR_CODE_IO_UNSPECIFIED
                             if (retryCount >= 5) {
-                                playerError = "Не удалось воспроизвести видео (кодек не поддерживается)"
+                                // #VIDEO-TRAILER-FALLBACK (Step 4): copyright-restricted
+                                // видео — VK отдаёт только 30s trailer URL в files["trailer"].
+                                // После исчерпания всех retry (свежий video.get × 3 в
+                                // retryWithFreshUrl + fallback форматы × N в onPlayerError)
+                                // — играем трейлер, чтобы пользователь увидел хотя бы
+                                // превью вместо чёрного экрана. isPlayingTrailer защищает
+                                // от повторного входа (если трейлер тоже упадёт с ошибкой,
+                                // не уходим в цикл «трейлер → ошибка → трейлер»).
+                                val trailerUrl = resolvedVideo.files?.get("trailer")
+                                if (trailerUrl != null && trailerUrl.isNotBlank() && !isPlayingTrailer) {
+                                    playerError = "Видео недоступно. Воспроизводим трейлер…"
+                                    isPlayingTrailer = true
+                                    AppLog.i(TAG, "#VIDEO-TRAILER-FALLBACK: playing trailer for video #${resolvedVideo.id}")
+                                    scope.launch {
+                                        kotlinx.coroutines.delay(500L)
+                                        try {
+                                            // #VIDEO-TRAILER-FALLBACK: trailer URL от VK — обычно
+                                            // прогрессивный mp4, но на всякий случай вычисляем MIME по
+                                            // URL (m3u8/mpd), иначе ExoPlayer sniffer справится сам.
+                                            val trailerUri = Uri.parse(trailerUrl)
+                                            val trailerMediaItem = MediaItem.Builder()
+                                                .setUri(trailerUri)
+                                                .apply { mimeFor(null, trailerUrl)?.let { setMimeType(it) } }
+                                                .build()
+                                            self.setMediaItem(trailerMediaItem)
+                                            self.prepare()
+                                            self.playWhenReady = true
+                                        } catch (e: Exception) {
+                                            AppLog.w(TAG, "#VIDEO-TRAILER-FALLBACK: trailer playback failed: ${e.message}")
+                                            playerError = "Не удалось воспроизвести видео"
+                                        }
+                                    }
+                                } else {
+                                    playerError = "Не удалось воспроизвести видео (кодек не поддерживается)"
+                                }
                             } else if (isDecodingFailed) {
                                 playerError = "Кодек не поддерживается. Пробую другой формат…"
                                 val files = resolvedVideo.files
@@ -1292,7 +1539,7 @@ fun VideoPlayerScreen(
                                         }
                                         AppLog.i(TAG, "DECODING_FAILED → mp4 fallback: ${fallbackUrl.take(80)}")
                                     } else {
-                                        retryWithFreshUrl()
+                                        retryWithFreshUrl(self)
                                     }
                                 }
                             } else if (isHttpBadStatus) {
@@ -1309,7 +1556,7 @@ fun VideoPlayerScreen(
                                     http400FreshAttempts += 1
                                     playerError = "Ошибка сети (HTTP 400). Запрашиваю свежие ссылки…"
                                     isSwitchingQuality = false
-                                    retryWithFreshUrl()
+                                    retryWithFreshUrl(self)
                                 } else {
                                     // #CLIP-HLS-DASH-START: VK-клипы не отдают прогрессивный
                                     // mp4 (ProgressiveMediaPeriod → HTTP 400) даже со свежими
@@ -1346,10 +1593,10 @@ fun VideoPlayerScreen(
                                             selectedHls = false
                                             AppLog.i(TAG, "HTTP 400 → fallback format: ${nextUrl.take(80)}")
                                         } else {
-                                            retryWithFreshUrl()
+                                            retryWithFreshUrl(self)
                                         }
                                     } else {
-                                        retryWithFreshUrl()
+                                        retryWithFreshUrl(self)
                                     }
                                 }
                             } else if (isMalformedManifest) {
@@ -1364,7 +1611,7 @@ fun VideoPlayerScreen(
                                     http400FreshAttempts += 1
                                     playerError = "Некорректный плейлист. Запрашиваю свежие ссылки…"
                                     isSwitchingQuality = false
-                                    retryWithFreshUrl()
+                                    retryWithFreshUrl(self)
                                 } else {
                                     playerError = "Некорректный плейлист. Пробую другой формат…"
                                     isSwitchingQuality = false
@@ -1392,10 +1639,10 @@ fun VideoPlayerScreen(
                                             selectedHls = false
                                             AppLog.i(TAG, "Malformed manifest → fallback format: ${nextUrl.take(80)}")
                                         } else {
-                                            retryWithFreshUrl()
+                                            retryWithFreshUrl(self)
                                         }
                                     } else {
-                                        retryWithFreshUrl()
+                                        retryWithFreshUrl(self)
                                     }
                                 }
                             } else if (isIoNetworkErrorVideo && ioRetryCount < 2) {
@@ -1431,7 +1678,7 @@ fun VideoPlayerScreen(
                                 }
                             } else {
                                 playerError = "Ошибка видео: ${error.errorCodeName}. Повторная попытка…"
-                                retryWithFreshUrl()
+                                retryWithFreshUrl(self)
                             }
                         }
 
@@ -1451,6 +1698,19 @@ fun VideoPlayerScreen(
                                 // IO-network retry. Следующая транзиентная ошибка снова получит
                                 // 2 grace-попытки.
                                 ioRetryCount = 0
+                            }
+                        }
+
+                        // #VIDEO-SERIES: при авто-переходе на следующий эпизод
+                        // (STATE_ENDED → ExoPlayer сам двигает currentMediaItemIndex
+                        // при REPEAT_MODE_OFF) обновляем currentEpisodeIndex — он
+                        // фидит overlay «Эпизод N/M» и enabled-состояние next/prev.
+                        // reason: TRANSITION_REASON_AUTO/SEEK/REPEAT/REMOVE — нам
+                        // неважно, во всех случаях индекс обновляется.
+                        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                            if (isSeriesMode) {
+                                currentEpisodeIndex = self.currentMediaItemIndex
+                                AppLog.d(TAG, "#VIDEO-SERIES: episode transition → idx=${self.currentMediaItemIndex} (reason=$reason)")
                             }
                         }
 
@@ -1545,7 +1805,16 @@ fun VideoPlayerScreen(
         // #VIDEO-DASH-MIMEBYKEY: MIME по ключу выбранного качества (клипы → точный
         // DASH/HLS тип; mp4_* → null = прогрессив без явного MIME).
         mimeFor(option.key, newUrl)?.let { mediaItemBuilder.setMimeType(it) }
-        player.setMediaItem(mediaItemBuilder.build())
+        // #VIDEO-SERIES: в режиме плейлиста setMediaItem заменил бы ВЕСЬ плейлист
+        // на один MediaItem → серия сломалась. Используем replaceMediaItem — он
+        // подменяет ТОЛЬКО текущий MediaItem (на startIndex), сохраняя остальные
+        // эпизоды. Позицию восстанавливаем seekTo(savedPosition) в onPlaybackStateChanged.
+        // Вне серии — прежнее поведение (setMediaItem, плеер на одно видео).
+        if (isSeriesMode) {
+            player.replaceMediaItem(player.currentMediaItemIndex, mediaItemBuilder.build())
+        } else {
+            player.setMediaItem(mediaItemBuilder.build())
+        }
         player.prepare()
 
         // W30-STABILITY: перезагрузка источника — reapplied сохранённый rate,
@@ -1590,7 +1859,13 @@ fun VideoPlayerScreen(
             .setUri(Uri.parse(url))
             .apply { mimeFor("hls", url)?.let { setMimeType(it) } }
             .build()
-        player.setMediaItem(mediaItem)
+        // #VIDEO-SERIES: в режиме плейлиста — replaceMediaItem (сохраняет серию),
+        // иначе — setMediaItem (одиночное видео, прежнее поведение). См. switchQuality.
+        if (isSeriesMode) {
+            player.replaceMediaItem(player.currentMediaItemIndex, mediaItem)
+        } else {
+            player.setMediaItem(mediaItem)
+        }
         player.prepare()
 
         // W30-STABILITY: reapplied сохранённый rate и при смене на HLS.
@@ -2074,6 +2349,46 @@ fun VideoPlayerScreen(
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                         }
+                        // #VIDEO-LIVE (Step 5): LIVE-бейдж для live-стримов (VK isLive==1).
+                        if (resolvedVideo.isLiveClip) {
+                            Box(
+                                modifier = Modifier
+                                    .background(VK_RED, RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text("LIVE", color = VK_WHITE, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        // #VIDEO-TRAILER-FALLBACK (Step 4): бейдж «Трейлер» когда играем
+                        // trailer (copyright-restricted видео, все retry исчерпаны).
+                        if (isPlayingTrailer) {
+                            Box(
+                                modifier = Modifier
+                                    .background(VK_RED, RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text("Трейлер", color = VK_WHITE, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        // #VIDEO-SERIES: бейдж «Эпизод N/M» для плейлиста альбома.
+                        // currentEpisodeIndex обновляется в onMediaItemTransition
+                        // (STATE_ENDED → авто-переход). Показываем ВСЕГДА в серии,
+                        // даже на старте (до первого transition) — индекс уже стартовый.
+                        if (isSeriesMode) {
+                            Box(
+                                modifier = Modifier
+                                    .background(VK_SETTINGS_HOVER, RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    "Эпизод ${currentEpisodeIndex + 1} / ${playlist?.size ?: 1}",
+                                    color = VK_WHITE, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
                         Text(
                             text = resolvedVideo.title,
                             style = MaterialTheme.typography.titleMedium,
@@ -2264,7 +2579,7 @@ fun VideoPlayerScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(playerError ?: "Ошибка", color = VK_WHITE, fontSize = 14.sp)
                                 Spacer(modifier = Modifier.height(8.dp))
-                                IconButton(onClick = { retryWithFreshUrl() }) {
+                                IconButton(onClick = { retryWithFreshUrl(exoPlayer) }) {
                                     Icon(Icons.Filled.Refresh, "Повторить", tint = VK_WHITE)
                                 }
                             }
@@ -2593,6 +2908,20 @@ fun VideoPlayerScreen(
                                     ) {
                                         // controls-left.s-18
                                         Row(verticalAlignment = Alignment.CenterVertically) {
+                                            // #VIDEO-SERIES: SkipPrevious — только в режиме
+                                            // плейлиста (видео открыто из альбома). На idx==0
+                                            // disabled (предыдущего эпизода нет). seekToPrevious()
+                                            // у ExoPlayer с плейлистом переходит на предыдущий
+                                            // MediaItem (при REPEAT_MODE_OFF — на границе остаётся).
+                                            if (isSeriesMode) {
+                                                VKControlButton(
+                                                    icon = Icons.Filled.SkipPrevious,
+                                                    contentDescription = "Предыдущий эпизод",
+                                                    enabled = currentEpisodeIndex > 0,
+                                                    onClick = { exoPlayer.seekToPrevious() },
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                            }
                                             // Play/Pause
                                             VKControlButton(
                                                 icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
@@ -2612,6 +2941,20 @@ fun VideoPlayerScreen(
                                                 fontSize = 13.sp,
                                                 modifier = Modifier.padding(horizontal = 4.dp),
                                             )
+
+                                            // #VIDEO-SERIES: SkipNext — только в режиме плейлиста.
+                                            // На последнем эпизоде disabled. seekToNext() переходит
+                                            // на следующий MediaItem; STATE_ENDED последнего эпизода
+                                            // завершает воспроизведение (REPEAT_MODE_OFF по умолчанию).
+                                            if (isSeriesMode) {
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                VKControlButton(
+                                                    icon = Icons.Filled.SkipNext,
+                                                    contentDescription = "Следующий эпизод",
+                                                    enabled = currentEpisodeIndex < (playlist?.size ?: 1) - 1,
+                                                    onClick = { exoPlayer.seekToNext() },
+                                                )
+                                            }
                                         }
 
                                         // controls-right.s-18
@@ -3075,14 +3418,19 @@ private fun VKControlButton(
     icon: ImageVector,
     contentDescription: String,
     onClick: () -> Unit,
+    // #VIDEO-SERIES: enabled=false — кнопка next/prev эпизода на границе плейлиста
+    // (idx==0 для SkipPrevious, idx==last для SkipNext). Material3 IconButton с
+    // enabled=false сам затемняет иконку и не зовёт onClick — отдельный tint не нужен.
+    enabled: Boolean = true,
 ) {
     IconButton(
         onClick = onClick,
+        enabled = enabled,
         modifier = Modifier.size(40.dp),
     ) {
         Icon(
             icon, contentDescription,
-            tint = VK_WHITE,
+            tint = if (enabled) VK_WHITE else VK_WHITE.copy(alpha = 0.3f),
             modifier = Modifier.size(24.dp),
         )
     }

@@ -112,12 +112,22 @@ import re.pinok.ui.screens.videoplayer.VideoDownloadSheet
  *  — Лента видео-карточек: 16:9 превью + длительность + бейдж "Офлайн"
  *    + заголовок + просмотры/дата + кнопки скачать/меню
  *
- * @param onVideoClick Callback при тапе на карточку — открывает VideoPlayerScreen.
+ * @param onVideoClick Callback при тапе на карточку — открывает VideoPlayerScreen
+ *  (одиночное видео: поиск / discovery / «Мои видео» вне альбома).
+ * @param onPlayFromAlbum #VIDEO-SERIES: callback при тапе на видео ВНУТРИ открытого
+ *  альбома — передаёт весь список эпизодов + индекс тапнутого, чтобы плеер
+ *  построил плейлист (setMediaItems + next/prev UI). null/empty playlist у
+ *  вызывающего = одиночное видео (onVideoClick).
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, kotlinx.coroutines.FlowPreview::class) // #VIDEO-SEARCH: debounce — FlowPreview API; #OPTIN-FIX: @OptIn не повторяем — параметры объединены в одну аннотацию; VIDEO-SCREEN-CRUD: combinedClickable — ExperimentalFoundationApi
 @Composable
 fun VideoScreen(
     onVideoClick: (Video) -> Unit = {},
+    // #VIDEO-SERIES: отдельный callback для открытия видео ИЗ альбома — несёт
+    // контекст серии (весь список эпизодов + стартовый индекс). Параллельный
+    // onVideoClick НЕ трогаем (его зовут из поиска/discovery/«Мои видео» — там
+    // одиночные видео, без серии). Стандартный паттерн: альбом browsed = серия.
+    onPlayFromAlbum: (videos: List<Video>, startIndex: Int) -> Unit = { _, _ -> },
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -716,7 +726,20 @@ fun VideoScreen(
                                         textColor = vkTextPrimary,
                                         secondaryColor = vkTextSecondary,
                                         accentColor = vkAccent,
-                                        onClick = { onVideoClick(video) },
+                                        // #VIDEO-SERIES: видео открыто ИЗ альбома → передаём ВЕСЬ список
+                                        // эпизодов + индекс тапнутого, чтобы плеер построил плейлист
+                                        // (setMediaItems + next/prev + episode overlay). albumVideos уже
+                                        // загружен с with_files=1 (см. videoGet) — у каждого эпизода есть
+                                        // files для немедленного старта без догрузки.
+                                        // IndexOfFirst (а не indexOf) — сравнение по составному ключу
+                                        // (ownerId+id), не по ссылке: VK может вернуть один и тот же Video
+                                        // разными инстансами после фильтрации distinctBy выше.
+                                        onClick = {
+                                            val idx = albumVideos.indexOfFirst {
+                                                it.ownerId == video.ownerId && it.id == video.id
+                                            }
+                                            onPlayFromAlbum(albumVideos, idx.coerceAtLeast(0))
+                                        },
                                         onDownloadClick = {
                                             val ds = downloads[VideoDownloadManager.videoKey(video.ownerId, video.id)]
                                             if (ds != null && ds.status != DownloadStatus.FAILED) {

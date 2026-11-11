@@ -168,6 +168,21 @@ object PlayerConnection {
     @Volatile
     private var lastErrorTrackTimeMs: Long = 0L
 
+    // #AUDIO-INTRO-FIX: детекция преждевременного конца трека (VK отдаёт truncated
+    // m3u8 — только пару сегментов — для restricted/preview треков). ExoPlayer
+    // проигрывает эти сегменты, попадает в STATE_ENDED без исключения, и
+    // onMediaItemTransition(AUTO) молча переключается на следующий трек.
+    // Фактическая длительность (ctrl.duration) при этом < 80% от заявленной в
+    // VK-метаданных (Track.duration). Решение: refresh URL через audioGetById
+    // (внутри которого AlAudioFallback.fetchReloadAudio — web remixsid path,
+    // восстанавливающий restricted-треки) и replay того же трека с 0.
+    // Throttle: 1 попытка на трек в 10с — если свежий URL тоже усечён, даём
+    // треку уйти в AUTO-advance (защита от бесконечного цикла).
+    @Volatile
+    private var prematureRefreshTrackId: Long = 0L
+    @Volatile
+    private var prematureRefreshAtMs: Long = 0L
+
     // Fix #51-C: pendingRestoreTrackId УБРАН — больше не нужен.
     // Раньше помечал трек для restore позиции после STATE_READY, но это
     // восстанавливало позицию при next/prev (явный переход) → баг "трек
@@ -501,9 +516,69 @@ object PlayerConnection {
         }
         val seq = ++queueSetSeq
         scope.launch {
+            // #AUDIO-INTRO-FIX step 4 (preemptive): если стартовый трек (тот, что
+            // пользователь выбрал кликом) имеет пустой/masked URL — VK иногда
+            // отдаёт плейсхолдер "audio_api_unavailable" вместо реальной ссылки,
+            // либо URL пуст после десериализации — preemptively перезапрашиваем
+            // его через audioGetById ДО prepareQueue. Иначе трек либо отфильтруется
+            // (нет URL + нет кэша → silent skip на другой трек), либо попадёт в
+            // очередь с мусорным URL → onPlayerError → реактивный refresh (step 3).
+            // Preemptive путь избегает первоначальной неудачной попытки playback.
+            // Throttle: используем те же prematureRefresh* поля — не дублируем
+            // попытку если только что был STATE_ENDED / onPlayerError refresh.
+            val origStartIdx = startIndex.coerceIn(0, tracks.lastIndex)
+            val origStart = tracks.getOrNull(origStartIdx)
+            var workingTracks = tracks
+            var workingPrePlayable = prePlayable
+            if (origStart != null) {
+                val url = origStart.url
+                val needsRefresh = url.isNullOrBlank() ||
+                    url.contains("audio_api_unavailable", ignoreCase = true)
+                if (needsRefresh) {
+                    val now = System.currentTimeMillis()
+                    val sameRecent = prematureRefreshTrackId == origStart.id &&
+                        now - prematureRefreshAtMs < 10_000L
+                    if (!sameRecent) {
+                        prematureRefreshTrackId = origStart.id
+                        prematureRefreshAtMs = now
+                        AppLog.w(TAG, "#AUDIO-INTRO-FIX preemptive: startTrack #${origStart.id} has no/masked URL (url=${url?.take(60)}) — refreshing via audioGetById BEFORE prepareQueue")
+                        try {
+                            val fresh = re.pinok.SovaApp.getOrNull()?.apiClient
+                                ?.audioGetById(origStart)
+                            if (fresh != null && !fresh.url.isNullOrBlank() &&
+                                !fresh.url.contains("audio_api_unavailable", ignoreCase = true)
+                            ) {
+                                AppLog.i(TAG, "#AUDIO-INTRO-FIX preemptive: fresh URL obtained for #${origStart.id} — replacing in playlist before prepareQueue")
+                                workingTracks = tracks.map { if (it.id == origStart.id) fresh else it }
+                                // prePlayable мог НЕ содержать origStart (если URL был
+                                // null и кэша нет) — пересобираем из workingTracks,
+                                // сохраняя исходный фильтр.
+                                workingPrePlayable = workingTracks.filter { t ->
+                                    !t.url.isNullOrBlank() || TrackDownloadManager.isDownloaded(t.id)
+                                }
+                            } else {
+                                AppLog.w(TAG, "#AUDIO-INTRO-FIX preemptive: audioGetById returned no fresh URL for #${origStart.id} — proceeding with original queue (reactive step 2/3 will handle)")
+                            }
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (e: Exception) {
+                            AppLog.e(TAG, "#AUDIO-INTRO-FIX preemptive: audioGetById failed for #${origStart.id}", e)
+                        }
+                    } else {
+                        AppLog.d(TAG, "#AUDIO-INTRO-FIX preemptive: skip refresh for #${origStart.id} — already attempted ${now - prematureRefreshAtMs}ms ago")
+                    }
+                }
+            }
+            if (workingPrePlayable.isEmpty()) {
+                AppLog.w(TAG, "playTrackList: нет воспроизводимых треков после preemptive refresh")
+                _playerState.value = _playerState.value.copy(
+                    error = "Нет воспроизводимых треков — у всех отсутствует URL",
+                )
+                return@launch
+            }
             // Шаг 2: Dispatchers.Default — localCache + MediaItem'ы (реальный I/O).
             val prepared = withContext(Dispatchers.Default) {
-                prepareQueue(tracks, prePlayable, startIndex)
+                prepareQueue(workingTracks, workingPrePlayable, startIndex)
             } ?: return@launch // playable пуст после валидации кэша — error уже опубликован
             // Шаг 3: main — применяем очередь, если не устарела.
             if (seq != queueSetSeq) {
@@ -1450,6 +1525,18 @@ object PlayerConnection {
                 val oldPos = _playerState.value.positionMs
                 val oldDur = _playerState.value.durationMs
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                    // #AUDIO-INTRO-FIX: safety-net logging. Основная refresh-логика
+                    // живёт в onPlaybackStateChanged(STATE_ENDED) — она вызывается
+                    // ДО этого transition'а и уже успела (или нет) перезапросить URL
+                    // и setMediaItem(...)→prepare()→playWhenReady=true, что отменяет
+                    // AUTO-advance. Если мы здесь — значит refresh НЕ сработал (свежий
+                    // URL тоже усечён, или audioGetById вернул null, или трек <30с).
+                    // Логируем расхождение длительностей для диагностики и даём
+                    // AUTO-advance пройти штатно (clearPosition → следующий трек).
+                    val declaredDurMs = oldTrack.duration.toLong() * 1000L
+                    if (declaredDurMs > 30_000L && (oldDur <= 0L || oldDur < declaredDurMs * 8 / 10)) {
+                        AppLog.w(TAG, "#AUDIO-INTRO-FIX safety-net: AUTO-advance from #${oldTrack.id} — actual=${oldDur}ms < declared=${declaredDurMs}ms (STATE_ENDED refresh did not prevent skip, or fresh URL also truncated)")
+                    }
                     re.pinok.media.PlaybackPositionStore.clearPosition(oldTrack.id.toString())
                     AppLog.d(TAG, "onMediaItemTransition: cleared pos for finished track #${oldTrack.id}")
                 } else {
@@ -1539,6 +1626,55 @@ object PlayerConnection {
             val track = currentTrack
             val local = if (track != null) TrackDownloadManager.isDownloaded(track.id) else false
             AppLog.i(TAG, "onPlaybackStateChanged → $stateName | track=#${track?.id ?: -1} local=$local pos=${ctrl.currentPosition}ms dur=${ctrl.duration}ms")
+
+            // #AUDIO-INTRO-FIX: STATE_ENDED без исключения = ExoPlayer доиграл
+            // текущий MediaItem до конца. Для VK audio это часто означает, что
+            // m3u8-manifest был УСЕЧЁН (restricted/preview трек — VK отдаёт
+            // только пару сегментов + #EXT-X-ENDLIST). ExoPlayer честно играет
+            // эти сегменты и попадает в STATE_ENDED → onMediaItemTransition(AUTO)
+            // молча скипает на следующий трек. Сравниваем фактическую длительность
+            // (ctrl.duration) с заявленной (Track.duration*1000): если actual
+            // неизвестен (<=0) или < 80% заявленного → manifest усечён → refresh
+            // URL через audioGetById и replay того же трека с 0. Throttle 1/10с.
+            if (playbackState == Player.STATE_ENDED && track != null) {
+                val declaredDurMs = track.duration.toLong() * 1000L
+                val actualDurMs = ctrl.duration
+                AppLog.i(TAG, "#AUDIO-INTRO-FIX diag: track=#${track.id} declared=${declaredDurMs}ms actual=${actualDurMs}ms pos=${ctrl.currentPosition}ms")
+                if (declaredDurMs > 30_000L &&
+                    (actualDurMs <= 0L || actualDurMs < declaredDurMs * 8 / 10)
+                ) {
+                    val now = System.currentTimeMillis()
+                    val sameRecent = prematureRefreshTrackId == track.id &&
+                        now - prematureRefreshAtMs < 10_000L
+                    if (sameRecent) {
+                        AppLog.w(TAG, "#AUDIO-INTRO-FIX: STATE_ENDED premature (track=#${track.id} actual=${actualDurMs}ms < declared=${declaredDurMs}ms) BUT refresh already attempted ${now - prematureRefreshAtMs}ms ago — letting AUTO-advance proceed")
+                    } else {
+                        prematureRefreshTrackId = track.id
+                        prematureRefreshAtMs = now
+                        AppLog.w(TAG, "#AUDIO-INTRO-FIX: premature end — track #${track.id} played only ${ctrl.currentPosition}ms of declared ${declaredDurMs}ms (ExoPlayer dur=$actualDurMs) → refreshing URL via audioGetById (AL-audio fallback path)")
+                        scope.launch {
+                            try {
+                                val fresh = re.pinok.SovaApp.getOrNull()?.apiClient
+                                    ?.audioGetById(track)
+                                if (fresh != null && !fresh.url.isNullOrBlank() && fresh.url != track.url) {
+                                    AppLog.i(TAG, "#AUDIO-INTRO-FIX: fresh URL obtained for #${track.id}, replaying from 0 (was truncated)")
+                                    withController { c ->
+                                        c.setMediaItem(fresh.toMediaItem(), 0L)
+                                        c.prepare()
+                                        c.playWhenReady = true
+                                    }
+                                } else {
+                                    AppLog.w(TAG, "#AUDIO-INTRO-FIX: audioGetById returned no fresh URL for #${track.id} (fresh=$fresh) — falling through to AUTO-advance")
+                                }
+                            } catch (ce: kotlinx.coroutines.CancellationException) {
+                                throw ce
+                            } catch (e: Exception) {
+                                AppLog.e(TAG, "#AUDIO-INTRO-FIX: audioGetById refresh failed for #${track.id}", e)
+                            }
+                        }
+                    }
+                }
+            }
             // Fix #178: BUFFERING watchdog — запускаем при входе в BUFFERING,
             // отменяем при любом другом state. Раньше срабатывал через 9с (в
             // docstring было написано 30с — баг несоответствия). Теперь 15с — это
@@ -1654,6 +1790,12 @@ object PlayerConnection {
                 AppLog.e(TAG, "ONLINE ERROR details: track=#${track.id} url=${track.url?.take(80)}")
             }
             AppLog.e(TAG, "ERROR cause: ${error.cause?.javaClass?.simpleName}: ${error.cause?.message}")
+            // #AUDIO-INTRO-FIX diag: сверка длительностей — если VK-заявленная
+            // длительность сильно больше фактической, это косвенный признак
+            // усечённого/preview-URL (хотя здесь пришёл явный error, а не STATE_ENDED).
+            if (track != null) {
+                AppLog.i(TAG, "#AUDIO-INTRO-FIX diag: track=#${track.id} declared=${track.duration.toLong() * 1000L}ms actual=${controller?.duration ?: -1L}ms pos=${controller?.currentPosition ?: -1L}ms")
+            }
 
             // #NET-GRACE: IO-ошибка → retry вместо немедленного error-UI / local-cache fallback.
             //
@@ -1700,6 +1842,56 @@ object PlayerConnection {
             }
             if (isIoNetworkError && track != null) {
                 AppLog.w(TAG, "#NET-GRACE: IO network error — 3 retries exhausted, falling through to local-cache/skip/error logic (track=#${track.id})")
+            }
+
+            // #AUDIO-INTRO-FIX: перед local-cache fallback / PARSING-skip / error-UI
+            // делаем ОДНУ попытку refresh URL через audioGetById. VK audio URLs
+            // регулярно «протухают» (~1ч), маскируются (audio_api_unavailable) или
+            // выдаются усечёнными (truncated m3u8 для restricted/preview). Метод
+            // audioGetById внутри себя сначала пробует audio.getById, а при отсутствии
+            // url — AlAudioFallback.fetchReloadAudio (web remixsid path, который
+            // восстанавливает restricted-треки). Throttle 10с на трек через те же
+            // prematureRefresh* поля — чтобы не дублировать попытку STATE_ENDED-refresh
+            // (если только что был premature-end refresh, не ретраим здесь).
+            // DECODING_FAILED исключаем: аудиоданные битые, новый URL не поможет.
+            if (track != null &&
+                error.errorCode != androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED
+            ) {
+                val now = System.currentTimeMillis()
+                val sameRecent = prematureRefreshTrackId == track.id &&
+                    now - prematureRefreshAtMs < 10_000L
+                if (!sameRecent) {
+                    prematureRefreshTrackId = track.id
+                    prematureRefreshAtMs = now
+                    AppLog.w(TAG, "#AUDIO-INTRO-FIX: onPlayerError (code=${error.errorCode} ${error.errorCodeName}) — refreshing URL via audioGetById (track=#${track.id})")
+                    scope.launch {
+                        try {
+                            val fresh = re.pinok.SovaApp.getOrNull()?.apiClient
+                                ?.audioGetById(track)
+                            if (fresh != null && !fresh.url.isNullOrBlank() && fresh.url != track.url) {
+                                val posMs = _playerState.value.positionMs
+                                AppLog.i(TAG, "#AUDIO-INTRO-FIX: fresh URL obtained for #${track.id}, replaying from ${posMs}ms")
+                                withController { c ->
+                                    c.setMediaItem(fresh.toMediaItem(), posMs)
+                                    c.prepare()
+                                    c.playWhenReady = true
+                                }
+                            } else {
+                                AppLog.w(TAG, "#AUDIO-INTRO-FIX: audioGetById returned no fresh URL for #${track.id} (fresh.url=${fresh?.url?.take(60)}) — falling through to local-cache/skip/error logic")
+                            }
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (e: Exception) {
+                            AppLog.e(TAG, "#AUDIO-INTRO-FIX: audioGetById refresh failed for #${track.id}", e)
+                        }
+                    }
+                    // Не пробрасываем error в UI сейчас — coroutine или сработает
+                    // (replay) или провалится и тогда следующий onPlayerError дойдёт
+                    // до local-cache / PARSING-skip / error-UI ниже.
+                    return
+                } else {
+                    AppLog.w(TAG, "#AUDIO-INTRO-FIX: onPlayerError — skip URL refresh for #${track.id}, already attempted ${now - prematureRefreshAtMs}ms ago (falling through to local-cache/skip/error)")
+                }
             }
 
             // Fix #233 (P0): при ЛЮБОЙ ошибке воспроизведения (не только PARSING_*)

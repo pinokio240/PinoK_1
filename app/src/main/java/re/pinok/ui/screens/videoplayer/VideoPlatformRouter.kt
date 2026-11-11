@@ -97,6 +97,12 @@ fun VideoPlatformRouter(
     onBack: () -> Unit,
     // FIX-B: клик по имени автора комментария видео → UserProfile (из SovaNavHost).
     onUserClick: (Long) -> Unit = {},
+    // #VIDEO-SERIES: если видео открыто из альбома — передаём список эпизодов
+    // + стартовый индекс. null = одиночное видео (прежнее поведение). Применяется
+    // ТОЛЬКО к VK/UNKNOWN ветке (нативный ExoPlayer); OK/YouTube/WebView ветки
+    // игнорируют playlist (там нет setMediaItems — WebView играет один iframe).
+    playlist: List<Video>? = null,
+    startIndex: Int = 0,
 ) {
     val context = LocalContext.current
     val app = SovaApp.getOrNull()
@@ -117,8 +123,18 @@ fun VideoPlatformRouter(
         // Нативный путь: VK API files. UNKNOWN fallback тоже сюда —
         // VideoPlayerScreen сам попытается videoGetById и в случае неудачи покажет
         // понятную ошибку. Флаг externalVideosEnabled на VK/UNKNOWN НЕ влияет.
+        // #VIDEO-SERIES: playlist/startIndex передаём ТОЛЬКО сюда — OK/YouTube/
+        // EXTERNAL_IFRAME/INSTAGRAM ветки используют WebView/OkVideoRepository,
+        // там setMediaItems неприменим (один embed URL на iframe).
         VideoPlatform.VK,
-        VideoPlatform.UNKNOWN -> VideoPlayerScreen(video = video, onBack = onBack, onUserClick = onUserClick)
+        VideoPlatform.UNKNOWN -> VideoPlayerScreen(
+            video = video,
+            onBack = onBack,
+            onUserClick = onUserClick,
+            // #VIDEO-SERIES: контекст серии из VideoHolder (null = одиночное видео).
+            playlist = playlist,
+            startIndex = startIndex,
+        )
 
         // FEED-FIX-4 (#349): OK-видео зависит от externalVideosEnabled (default true).
         // При externalEnabled=true: нативный путь (OkVideoRepository → ExoPlayer,

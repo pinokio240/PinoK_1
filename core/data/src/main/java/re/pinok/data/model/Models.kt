@@ -262,6 +262,13 @@ data class Video(
     // Fix #69: access_key нужен для повторного запроса video.get?videos=owner_id_video_id_access_key,
     // если первичный files оказался пустым или устарел (URL'ы короткоживущие, ~часы).
     @SerializedName("access_key")  val accessKey: String? = null,
+    // #VIDEO-SERIES: альбом, которому принадлежит видео (VK video.get с album_id).
+    // VK-альбом = серия/плейлист (лекции, сериал, курса). Когда юзер открывает
+    // видео из альбома, VideoScreen передаёт playlist (список всех видео альбома)
+    // в VideoPlayerScreen → setMediaItems + next/prev UI. albumTitle — для заголовка
+    // серии в overlay; null = одиночное видео (не из альбома).
+    @SerializedName("album_id")    val albumId: Long? = null,
+    @SerializedName("album_title") val albumTitle: String? = null,
     // Sprint 2, P1-2 (#89): лайки на видео. VK возвращает likes{count,user_likes}
     // при video.get и в attachments ленты (extended=1).
     @SerializedName("likes")       val likes: Post.Likes? = null,

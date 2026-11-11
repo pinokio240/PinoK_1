@@ -10521,6 +10521,10 @@ class VKApiClient(
             // #VIDEO-FRAME-FIX: extended=1 — иначе VK не возвращает image[] (превью)
             // и files (прямые URL). С extended=0 фрейм пустой, а URL нет → WebView fallback.
             "extended" to "1",
+            // #VIDEO-SERIES: with_files=1 — VK иногда скрывает files для длинных/сериальных
+            // видео при extended=1. with_files=1 форсирует возврат прямых mp4/hls URL —
+            // нужно для плейлиста (без files следующий эпизод не проиграть).
+            "with_files" to "1",
         )
         val json = call("video.get", args) ?: return null
         return try {
@@ -10572,7 +10576,10 @@ class VKApiClient(
         if (isOffline()) return emptyList()
         // #VIDEO-FRAME-FIX: extended=1 — иначе нет image[] (превью) и files (URL),
         // у OK-crosspost видео фрейм не рисуется и играть нечем.
-        val args = mutableMapOf("count" to count.toString(), "extended" to "1")
+        // #VIDEO-SERIES: with_files=1 — для видео альбома (album_id) VK может скрыть
+        // files при extended=1; форсируем возврат прямых URL (плейлист играет каждый
+        // эпизод по files, без догрузки video.get на каждый переход).
+        val args = mutableMapOf("count" to count.toString(), "extended" to "1", "with_files" to "1")
         if (ownerId != null) args["owner_id"] = ownerId.toString()
         // #VIDEO-PORT: album_id — видео конкретного альбома.
         if (albumId != null) args["album_id"] = albumId.toString()
@@ -10630,7 +10637,9 @@ class VKApiClient(
         albumId: Long? = null,
     ): Pair<List<Video>, Int> {
         if (isOffline()) return emptyList<Video>() to 0
-        val args = mutableMapOf("count" to count.toString(), "extended" to "1")
+        // #VIDEO-SERIES: with_files=1 — для видео альбома (album_id) VK может скрыть
+        // files при extended=1; форсируем возврат прямых URL (нужно для плейлиста).
+        val args = mutableMapOf("count" to count.toString(), "extended" to "1", "with_files" to "1")
         if (ownerId != null) args["owner_id"] = ownerId.toString()
         if (albumId != null) args["album_id"] = albumId.toString()
         if (offset > 0) args["offset"] = offset.toString()
@@ -10676,6 +10685,9 @@ class VKApiClient(
             "videos" to videos.joinToString(","),
             // extended=1 — иначе нет image[] (превью) и files (как в videoGetById).
             "extended" to "1",
+            // #VIDEO-SERIES: with_files=1 — форсируем возврат прямых mp4/hls URL
+            // (VK иногда скрывает files для серийных видео при extended=1).
+            "with_files" to "1",
             // VK API: не более 200 идентификаторов/объектов за вызов.
             "count" to videos.size.coerceAtMost(200).toString(),
         )
@@ -14084,6 +14096,12 @@ class VKApiClient(
             musicInfo = musicInfo,
             // nearest_clips / next_clip / prev_clip парсятся отдельно при необходимости
             storyId = safeLongNullable(o.get("story_id")),
+            // #VIDEO-SERIES: парсим album_id/album_title из video.get (VK возвращает
+            // их для видео, принадлежащих альбому). albumTitle может отсутствовать —
+            // VK не всегда его отдаёт; тогда только albumId (нужен для логики выбора
+            // альбома в VideoScreen, а не для заголовка overlay).
+            albumId = safeLongNullable(o.get("album_id")),
+            albumTitle = safeString(o.get("album_title")),
         ).withDetectedPlatform()
     }
 

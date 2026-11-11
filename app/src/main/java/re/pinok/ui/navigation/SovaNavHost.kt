@@ -2010,6 +2010,18 @@ fun SovaNavHost(
                         onVideoClick = { video ->
                             VideoHolder.open(video)
                         },
+                        // #VIDEO-SERIES: видео открыто из альбома → VideoHolder.open
+                        // с плейлистом + стартовым индексом. Overlay-блок ниже читает
+                        // VideoHolder.playlist/startIndex и передаёт в VideoPlatformRouter
+                        // → VideoPlayerScreen (setMediaItems + next/prev UI).
+                        onPlayFromAlbum = { videos, startIndex ->
+                            //videos.firstOrNull { ... } — видео на тап уже выбрано в VideoScreen,
+                            // берём стартовый (по startIndex) эпизод как активный для overlay.
+                            val startVideo = videos.getOrNull(startIndex)
+                            if (startVideo != null) {
+                                VideoHolder.open(startVideo, videos, startIndex)
+                            }
+                        },
                     )
                 }
                 composable(Screen.Profile.route) {
@@ -3626,6 +3638,11 @@ composable(Screen.CallsHistory.route) {
         }
         VideoPlatformRouter(
             video = video,
+            // #VIDEO-SERIES: контекст альбома из VideoHolder — null для одиночных
+            // видео (поиск/discovery/«Мои видео»), непустой список для эпизодов.
+            // Читаем синхронно: open() уже записал значение до recomposition overlay.
+            playlist = VideoHolder.playlist,
+            startIndex = VideoHolder.startIndex,
             onBack = { VideoHolder.close() },
             // FIX-B: клик по имени автора комментария видео → UserProfile.
             onUserClick = { uid -> nav.navigate(Screen.UserProfile.buildRoute(uid)) },
@@ -3706,6 +3723,12 @@ composable(Screen.CallsHistory.route) {
  * Держатель видео для overlay-плеера (#90).
  * Видео открывается поверх текущего экрана без nav.navigate() —
  * текущий экран остаётся живым в Composition, скролл не теряется.
+ *
+ * #VIDEO-SERIES: расширение holder-паттерна для плейлиста альбома. Список
+ * Video не сериализуется в nav-args (большие объекты, ~50 эпизодов с files),
+ * поэтому живёт в этом процессном singleton-холдере (как last/active/commentId).
+ * Потребляется overlay-блоком ниже (VideoPlatformRouter) и сбрасывается в close().
+ * null = одиночное видео (поиск/discovery/«Мои видео» — прежнее поведение).
  */
 object VideoHolder {
     @Volatile
@@ -3717,6 +3740,14 @@ object VideoHolder {
     // шторки комментариев в VideoPlayerScreen.
     @Volatile
     var commentId: Long = 0L
+
+    // #VIDEO-SERIES: плейлист эпизодов альбома + стартовый индекс. null/empty =
+    // одиночное видео (onVideoClick). Невolatile-список читается синхронно в
+    // overlay-блоке (один writer = VideoHolder.open, один reader = overlay).
+    @Volatile
+    var playlist: List<Video>? = null
+    @Volatile
+    var startIndex: Int = 0
 
     private val _active = MutableStateFlow<Video?>(null)
     val active = _active.asStateFlow()
@@ -3730,11 +3761,31 @@ object VideoHolder {
     fun open(video: Video, commentId: Long) {
         last = video
         this.commentId = commentId
+        // #VIDEO-SERIES: одиночное видео — сбрасываем плейлист (иначе от прежнего
+        // открытия альбома остался бы чужой список, и плеер ушёл бы в режим серии).
+        playlist = null
+        startIndex = 0
+        _active.value = video
+    }
+
+    // #VIDEO-SERIES: перегрузка для открытия видео ИЗ альбома — несёт контекст
+    // серии (весь список эпизодов + стартовый индекс). Видео из плейлиста = start
+    // (для immediate play), остальные эпизоды — siblings для next/prev.
+    // playlist null/empty = одиночное видео (degrade to onVideoClick behaviour).
+    fun open(video: Video, playlist: List<Video>?, startIndex: Int) {
+        last = video
+        this.commentId = 0L
+        this.playlist = playlist
+        this.startIndex = startIndex
         _active.value = video
     }
 
     fun close() {
         _active.value = null
+        // #VIDEO-SERIES: при закрытии плеера сбрасываем плейлист — иначе повторное
+        // открытие одиночного видео через open(video) унаследовало бы чужой список.
+        playlist = null
+        startIndex = 0
     }
 
     /**
@@ -3745,6 +3796,10 @@ object VideoHolder {
     fun clear() {
         last = null
         commentId = 0L
+        // #VIDEO-SERIES: сброс плейлиста при logout — чужой альбом не должен
+        // переживать смену аккаунта.
+        playlist = null
+        startIndex = 0
         _active.value = null
     }
 }
