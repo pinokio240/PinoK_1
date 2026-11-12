@@ -14,6 +14,10 @@ securityCrypto = "1.1.0-beta01"
 biometric = "1.4.0-alpha02"
 okhttp = "4.12.0"
 coil = "3.3.0"
+# #STICKER-LOTTIE: lottie-compose — рендер VK TGS-стикеров (gzipped Lottie JSON).
+# Coil не умеет декодировать Lottie → .tgs/.json пропускался и стикер
+# показывался статичным. 6.4.0 — совместимо с Compose BOM 2025.06.00 / Kotlin 2.4.0.
+lottie = "6.4.0"
 gson = "2.13.1"
 kotlinxCoroutines = "1.10.2"
 webkit = "1.14.0"
@@ -123,6 +127,12 @@ coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp"
 coil-gif = { group = "io.coil-kt.coil3", name = "coil-gif", version.ref = "coil" }
 # Fix #IM-REACTIONS-SVG: картинки реакций VK (messages.getReactionsAssets) — SVG.
 coil-svg = { group = "io.coil-kt.coil3", name = "coil-svg", version.ref = "coil" }
+
+# #STICKER-LOTTIE: lottie-compose — рендер анимированных TGS-стикеров VK.
+# TGS = gzipped Lottie JSON; Coil не декодирует Lottie → отдельный рендерер
+# (AnimatedStickerView) скачивает .tgs, gunzip, парсит LottieComposition,
+# проигрывает через LottieAnimation. Имя accessor'а: libs.lottie.compose.
+lottie-compose = { group = "com.airbnb.android", name = "lottie-compose", version.ref = "lottie" }
 
 # Gson
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }

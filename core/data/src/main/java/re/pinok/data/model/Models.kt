@@ -1603,13 +1603,22 @@ data class StickerAttachment(
         ?.firstOrNull { it.width >= 256 }?.url
         ?: images?.maxByOrNull { it.width }?.url
 
-    /** Fix #229: URL для отображения с анимацией. Lottie (.json/.tgs) пропускаем. */
-    val animatedDisplayUrl: String? get() {
-        val u = animationUrl ?: return null
-        val lower = u.substringBefore('?').substringAfterLast('/').lowercase()
-        if (lower.endsWith(".json") || lower.endsWith(".tgs")) return null
-        return u
-    }
+    /** Fix #229: URL для отображения с анимацией.
+     *  #STICKER-LOTTIE: Lottie (.json/.tgs) больше НЕ пропускается — AnimatedStickerView
+     *  рендерит TGS через lottie-compose. animation_url валиден как для Lottie, так и
+     *  для GIF/animated-WebP. Caller (UI) различает форматы через isLottie.
+     *  Extension-less URL (типичный случай для VK) пропускаем к Coil — декодеры
+     *  определяют формат по magic bytes. */
+    val animatedDisplayUrl: String? get() = animationUrl
+
+    /** #STICKER-LOTTIE: true если animation_url — Lottie (.json/.tgs).
+     *  Рендерится через lottie-compose (AnimatedStickerView), НЕ Coil — Coil не
+     *  умеет декодировать Lottie. URL достаётся из animatedDisplayUrl (или напрямую
+     *  из animationUrl). */
+    val isLottie: Boolean get() = animationUrl?.let { u ->
+        val l = u.substringBefore('?').substringAfterLast('/').lowercase()
+        l.endsWith(".tgs") || l.endsWith(".json")
+    } ?: false
 
     /** Fix #229: лучший URL для рендера — анимированный если есть, иначе статичный. */
     val renderUrl: String? get() = animatedDisplayUrl ?: displayUrl
@@ -1659,19 +1668,24 @@ data class StickerItem(
         ?: displayUrl
 
     /** Fix #229: URL для ОТОБРАЖЕНИЯ с анимацией.
-     *  Возвращаем animation_url только если он декодируется Coil-ом
-     *  (GIF / animated WebP). Lottie-анимации (.json / .tgs) Coil не умеет —
-     *  для них возвращаем null, рендер падает на статичный displayUrl.
-     *  Extension-less URL (типичный случай для VK) пропускаем к Coil —
-     *  декодеры определяют формат по magic bytes. */
-    val animatedDisplayUrl: String? get() {
-        val u = animationUrl ?: return null
-        val lower = u.substringBefore('?').substringAfterLast('/').lowercase()
-        if (lower.endsWith(".json") || lower.endsWith(".tgs")) return null
-        return u
-    }
+     *  #STICKER-LOTTIE: Lottie (.json/.tgs) больше НЕ фильтруется — AnimatedStickerView
+     *  рендерит TGS через lottie-compose. animation_url валиден как для Lottie, так и
+     *  для GIF/animated-WebP. Caller (UI) различает форматы через isLottie.
+     *  Extension-less URL (типичный случай для VK) пропускаем к Coil — декодеры
+     *  определяют формат по magic bytes. */
+    val animatedDisplayUrl: String? get() = animationUrl
 
-    /** Fix #229: признак анимированного стикера (для бейджа ▶ в пикере). */
+    /** #STICKER-LOTTIE: true если animation_url — Lottie (.json/.tgs).
+     *  Рендерится через lottie-compose (AnimatedStickerView), НЕ Coil. */
+    val isLottie: Boolean get() = animationUrl?.let { u ->
+        val l = u.substringBefore('?').substringAfterLast('/').lowercase()
+        l.endsWith(".tgs") || l.endsWith(".json")
+    } ?: false
+
+    /** Fix #229: признак анимированного стикера (для бейджа ▶ в пикере).
+     *  #STICKER-LOTTIE: включает Lottie-анимации — ранее .tgs/.json
+     *  исключались (isAnimated = animatedDisplayUrl != null было false),
+     *  теперь animatedDisplayUrl не skip'ит Lottie → бейдж ▶ виден и для TGS. */
     val isAnimated: Boolean get() = animatedDisplayUrl != null
 }
 

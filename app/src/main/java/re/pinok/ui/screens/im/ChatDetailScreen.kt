@@ -284,6 +284,9 @@ import re.pinok.util.toChatDate
 import re.pinok.util.toDayKey
 import re.pinok.util.toMsgTime
 import re.pinok.util.toRecordingTimeString
+// #WALL-CARD: форматирование длительности видео и счётчика просмотров wall-поста.
+import re.pinok.util.toDurationString
+import re.pinok.util.toCountString
 import androidx.activity.compose.rememberLauncherForActivityResult
 import java.io.File
 import java.text.SimpleDateFormat
@@ -6918,6 +6921,10 @@ private fun MessageBubble(
                             groups = groups,
                             textColor = textColor,
                             onClick = { onWallClick(wallPost) },
+                            // #WALL-CARD: внутренние видео/ссылки поста открываются
+                            // своими обработчиками (VideoPlayer / браузер), не PostDetail.
+                            onVideoClick = onVideoClick,
+                            onUrlClick = onUrlClick,
                         )
                     }
                 }
@@ -7012,25 +7019,28 @@ private fun MessageBubble(
                     // это НЕ Lottie (.json/.tgs), который Coil не проиграет.
                     val enrichedAnimUrl = sticker.animationUrl
                         ?: StickerAnimationCache.get(sticker.stickerId)
-                    val resolvedAnimUrl: String? = enrichedAnimUrl?.let { animUrl ->
-                        val lower = animUrl.substringBefore('?').substringAfterLast('/').lowercase()
-                        if (lower.endsWith(".json") || lower.endsWith(".tgs")) null else animUrl
-                    }
-                    val isAnimatedSticker = resolvedAnimUrl != null
-                    // Fix #229: renderUrl отдаёт animatedDisplayUrl (GIF/WebP) если есть,
-                    // иначе статичный displayUrl. Coil с GifDecoder/AnimatedWebPDecoder
-                    // (зарегистрированы в SovaApp.newImageLoader) проиграет анимацию.
-                    val url = resolvedAnimUrl ?: sticker.renderUrl
-                    if (url != null) {
+                    // #STICKER-LOTTIE: TGS/.json теперь рендерятся через lottie-compose
+                    // (AnimatedStickerView) — Coil Lottie не декодирует. GIF/animated-WebP
+                    // по-прежнему через AsyncImage (coil-gif). Lottie-URL НЕ отдаём в
+                    // resolvedAnimUrl — он пойдёт отдельной веткой ниже.
+                    val isLottieSticker = enrichedAnimUrl?.let { u ->
+                        val l = u.substringBefore('?').substringAfterLast('/').lowercase()
+                        l.endsWith(".tgs") || l.endsWith(".json")
+                    } ?: false
+                    val resolvedAnimUrl: String? = if (isLottieSticker) null else enrichedAnimUrl
+                    val isAnimatedSticker = isLottieSticker || resolvedAnimUrl != null
+                    if (isLottieSticker && enrichedAnimUrl != null) {
+                        // Lottie-стикер: TGS/.json рендерит AnimatedStickerView (gunzip +
+                        // LottieComposition + LottieAnimation loop). composition кешируется
+                        // по URL — повторные показы при скролле не парсят JSON заново.
                         Box(contentAlignment = Alignment.Center) {
-                            AsyncImage(
-                                model = url,
-                                contentDescription = "Стикер",
-                                modifier = Modifier.size(120.dp),
+                            re.pinok.ui.components.AnimatedStickerView(
+                                url = enrichedAnimUrl,
+                                sizeDp = 128,
                             )
                             // Fix #233 (sticker-badge): ▶ индикатор на анимированных
                             // стикерах в чате — видно что стикер должен анимироваться,
-                            // даже если картинка ещё грузится или не загрузилась (сеть).
+                            // даже если Lottie ещё грузится или не загрузилась (сеть).
                             if (isAnimatedSticker) {
                                 Box(
                                     modifier = Modifier
@@ -7047,6 +7057,41 @@ private fun MessageBubble(
                                         tint = MaterialTheme.colorScheme.onPrimary,
                                         modifier = Modifier.size(14.dp),
                                     )
+                                }
+                            }
+                        }
+                    } else {
+                        // Fix #229: renderUrl отдаёт animatedDisplayUrl (GIF/WebP) если есть,
+                        // иначе статичный displayUrl. Coil с GifDecoder/AnimatedWebPDecoder
+                        // (зарегистрированы в SovaApp.newImageLoader) проиграет анимацию.
+                        val url = resolvedAnimUrl ?: sticker.renderUrl
+                        if (url != null) {
+                            Box(contentAlignment = Alignment.Center) {
+                                AsyncImage(
+                                    model = url,
+                                    contentDescription = "Стикер",
+                                    modifier = Modifier.size(120.dp),
+                                )
+                                // Fix #233 (sticker-badge): ▶ индикатор на анимированных
+                                // стикерах в чате — видно что стикер должен анимироваться,
+                                // даже если картинка ещё грузится или не загрузилась (сеть).
+                                if (isAnimatedSticker) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .background(
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                                                shape = RoundedCornerShape(50),
+                                            )
+                                            .padding(2.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.PlayArrow,
+                                            contentDescription = "Анимированный стикер",
+                                            tint = MaterialTheme.colorScheme.onPrimary,
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -7698,7 +7743,13 @@ private fun WallReplyAttachmentCard(
     }
 }
 
-/** Fix #99: мини-карточка wall-вложения в сообщении (превью поста). */
+/** #WALL-CARD: rich-карточка wall-вложения в сообщении — паритет VK web
+ *  (AttachWallNew): header с аватаром + «Из канала»/«Запись на стене» subtitle
+ *  + forward-icon, полный текст с кликабельными ссылками (linkifyVkText),
+ *  внутренние вложения поста (видео/клип — AttachVideosClip-style preview,
+ *  фото, ссылки) и счётчик просмотров. Тап по карточке → PostDetailScreen
+ *  (onClick), тап по видео-превью → onVideoClick (открытие в плеере).
+ *  Fix #99 (базовая мини-карточка) → расширена до full-fidelity рендера. */
 @Composable
 private fun WallAttachmentCard(
     post: re.pinok.data.model.Post,
@@ -7706,28 +7757,54 @@ private fun WallAttachmentCard(
     groups: Map<Long, re.pinok.api.VKApiClient.GroupInfo>,
     textColor: Color,
     onClick: () -> Unit,
+    // #WALL-CARD: клик по внутреннему видео-вложению поста → VideoPlayer.
+    onVideoClick: (Video) -> Unit = {},
+    // #WALL-CARD: клик по ссылке в тексте/вложении поста → внутренний/внешний браузер.
+    onUrlClick: (String) -> Unit = {},
 ) {
     // Fix #244: состояние выбора для вложения (toggle в selection mode,
     // long-press → вход в selection / context menu).
     val sel = LocalAttachmentSelection.current
-    val authorName = if (post.fromId > 0) {
-        val p = profiles[post.fromId]
-        p?.let { "${it.firstName} ${it.lastName}" } ?: "id${post.fromId}"
-    } else {
-        val g = groups[-post.fromId]
-        g?.name ?: "Сообщество"
+
+    // --- Автор поста: fromId > 0 — пользователь, fromId < 0 — сообщество/канал. ---
+    val isCommunity = post.fromId < 0
+    val profile = if (post.fromId > 0) profiles[post.fromId] else null
+    val group = if (post.fromId < 0) groups[-post.fromId] else null
+    val authorAvatar: String? = when {
+        profile != null -> profile.photo100 ?: profile.photo200
+        group != null -> group.photoBase ?: group.photo100 ?: group.photo200
+        else -> null
     }
-    val thumbUrl = PhotoSizes.bestUrl(
-        post.attachments?.firstOrNull { it.type == "photo" && it.photo != null }?.photo?.sizes,
-    )
-    val truncatedText = post.text.take(120).let { if (post.text.length > 120) "$it..." else it }
+    val authorName: String = when {
+        profile != null -> "${profile.firstName} ${profile.lastName}".trim().ifBlank { "id${post.fromId}" }
+        group != null -> group.name.ifBlank { "Сообщество" }
+        post.fromId > 0 -> "id${post.fromId}"
+        else -> "Сообщество"
+    }
+    // VK web: для каналов/сообществ — «Из канала», для персональной стены — «Запись на стене».
+    val subtitle = if (isCommunity) "Из канала" else "Запись на стене"
+
+    // --- Внутренние вложения поста (attachments[].{photo,video,link}). ---
+    val innerAttachments = post.attachments ?: emptyList()
+    val photos = innerAttachments.asSequence()
+        .filter { it.type == "photo" && it.photo != null }
+        .mapNotNull { it.photo }
+        .toList()
+    val videos = innerAttachments.asSequence()
+        .filter { it.type == "video" && it.video != null }
+        .mapNotNull { it.video }
+        .toList()
+    val links = innerAttachments.asSequence()
+        .filter { it.type == "link" && it.link != null }
+        .mapNotNull { it.link }
+        .toList()
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 6.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(textColor.copy(alpha = 0.12f))
+            .clip(RoundedCornerShape(10.dp))
+            .background(textColor.copy(alpha = 0.10f))
             .combinedClickable(
                 onClick = {
                     if (sel != null && sel.selectionMode) sel.onToggleSelection()
@@ -7735,38 +7812,259 @@ private fun WallAttachmentCard(
                 },
                 onLongClick = { sel?.onLongPress?.invoke() },
             )
-            .padding(8.dp),
+            .padding(10.dp),
     ) {
-        Text(
-            text = authorName,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Medium,
-            color = textColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (truncatedText.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
+        // ─── Header: аватар (36dp) + subtitle + имя автора + forward-icon (trailing). ───
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(textColor.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (authorAvatar != null) {
+                    AsyncImage(
+                        model = authorAvatar,
+                        contentDescription = authorName,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else if (isCommunity) {
+                    Icon(
+                        Icons.Outlined.Group,
+                        contentDescription = null,
+                        tint = textColor.copy(alpha = 0.7f),
+                        modifier = Modifier.size(20.dp),
+                    )
+                } else {
+                    Text(
+                        text = authorName.take(1).ifBlank { "?" }.uppercase(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = textColor.copy(alpha = 0.7f),
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = textColor.copy(alpha = 0.6f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = authorName,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Outlined.Forward,
+                contentDescription = null,
+                tint = textColor.copy(alpha = 0.5f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
+
+        // ─── Текст поста с кликабельными ссылками (linkifyVkText: VK inline-ссылки,
+        //     упоминания [id|Имя], обычные URL). maxLines=8 + ellipsis (карточка
+        //     тапабельна → полный текст в PostDetailScreen). ───
+        if (post.text.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
             Text(
-                text = truncatedText,
+                text = re.pinok.util.linkifyVkText(post.text, textColor, onUrlClick),
                 style = MaterialTheme.typography.bodySmall,
                 color = textColor.copy(alpha = 0.95f),
-                maxLines = 3,
+                maxLines = 8,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (thumbUrl != null) {
-            Spacer(modifier = Modifier.height(6.dp))
+
+        // ─── Внутренние видео/клипы (AttachVideosClip-style preview). ───
+        if (videos.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (video in videos) {
+                    WallVideoPreview(
+                        video = video,
+                        textColor = textColor,
+                        onClick = {
+                            // В selection-mode тап по видео тоже toggle'ит выбор
+                            // (как фото-превью в MessageBubble:7128), иначе — opens video.
+                            if (sel != null && sel.selectionMode) sel.onToggleSelection()
+                            else onVideoClick(video)
+                        },
+                    )
+                }
+            }
+        }
+
+        // ─── Фото поста: первое — крупное превью, остальные (до 3) — мини-ряд. ───
+        if (photos.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            val mainPhoto = PhotoSizes.bestUrl(photos.first().sizes)
+            if (mainPhoto != null) {
+                AsyncImage(
+                    model = mainPhoto,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp)
+                        .clip(RoundedCornerShape(6.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            if (photos.size > 1) {
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (p in photos.drop(1).take(3)) {
+                        val url = PhotoSizes.bestUrl(p.sizes) ?: continue
+                        AsyncImage(
+                            model = url,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                }
+            }
+        }
+
+        // ─── link-вложения (мини-карточка: иконка + title/url). ───
+        if (links.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (link in links) {
+                    WallLinkPreview(link = link, textColor = textColor, onUrlClick = onUrlClick)
+                }
+            }
+        }
+
+        // ─── Footer: счётчик просмотров (ChannelPostMeta__views-style: «глаз» + «N»). ───
+        val viewsCount = post.views?.count ?: 0
+        if (viewsCount > 0) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.Visibility,
+                    contentDescription = null,
+                    tint = textColor.copy(alpha = 0.55f),
+                    modifier = Modifier.size(13.dp),
+                )
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    text = "${viewsCount.toCountString()} просмотров",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = textColor.copy(alpha = 0.55f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** #WALL-CARD: превью видео-вложения внутри wall-карточки (AttachVideosClip-style).
+ *  Вертикальный клип (200×320, video.isClip) или обычное видео (16:9, 200dp ширина)
+ *  с постером [Video.thumbUrl], тёмным overlay для контраста, иконкой ▶ (PlayCircle)
+ *  и бэйджем длительности снизу-справа. Тап → [onClick] (открытие в VideoPlayer). */
+@Composable
+private fun WallVideoPreview(
+    video: Video,
+    textColor: Color,
+    onClick: () -> Unit,
+) {
+    val poster = video.thumbUrl
+    val isClip = video.isClip
+    val boxModifier = if (isClip) {
+        Modifier.width(200.dp).height(320.dp)
+    } else {
+        Modifier.width(200.dp).aspectRatio(16f / 9f)
+    }
+    Box(
+        modifier = boxModifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(textColor.copy(alpha = 0.15f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (poster != null) {
             AsyncImage(
-                model = thumbUrl,
-                contentDescription = null,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(100.dp)
-                    .clip(RoundedCornerShape(4.dp)),
+                model = poster,
+                contentDescription = video.title.ifBlank { "Видео" },
+                modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
         }
+        // тёмный overlay — контраст для белой иконки ▶ и бэйджа длительности.
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)))
+        Icon(
+            Icons.Filled.PlayCircle,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(40.dp),
+        )
+        // бэйдж длительности снизу-справа (как VK web VideoPreview__duration).
+        if (video.duration > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 4.dp, vertical = 1.dp),
+            ) {
+                Text(
+                    text = video.duration.toDurationString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** #WALL-CARD: мини-карточка link-вложения внутри wall-поста.
+ *  Иконка-ссылка + title (или URL) — тап → [onUrlClick] (внутренний/внешний браузер
+ *  через openUrlExternal → INTERNAL-LINK-ROUTING для VK-доменов). */
+@Composable
+private fun WallLinkPreview(
+    link: Attachment.Link,
+    textColor: Color,
+    onUrlClick: (String) -> Unit,
+) {
+    val title = link.title?.takeIf { it.isNotBlank() } ?: link.url
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(textColor.copy(alpha = 0.08f))
+            .clickable { onUrlClick(link.url) }
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Link,
+            contentDescription = null,
+            tint = textColor.copy(alpha = 0.7f),
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall,
+            color = textColor.copy(alpha = 0.95f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -10019,6 +10317,10 @@ private fun ForwardedMessageBlock(
                     groups = groups,
                     textColor = textColor,
                     onClick = { onWallClick(wallPost) },
+                    // #WALL-CARD: внутренние видео/ссылки поста открываются
+                    // своими обработчиками (VideoPlayer / браузер), не PostDetail.
+                    onVideoClick = onVideoClick,
+                    onUrlClick = onUrlClick,
                 )
             }
 
@@ -10976,12 +11278,12 @@ private fun EmojiStickerPanel(
                         ) {
                             gridItems(currentStickers, key = { it.stickerId }) { sticker ->
                                 val url = sticker.displayUrl
-                                // Fix #229: предпочтительно анимированный URL (GIF/WebP). Coil с
-                                // GifDecoder/AnimatedWebPDecoder (зарегистрированы в SovaApp)
-                                // проиграет анимацию. Lottie (.json/.tgs) отфильтрован в модели
-                                // (animatedDisplayUrl вернёт null) → fallback на статичный url.
-                                val renderUrl = sticker.animatedDisplayUrl ?: url
-                                // Fix #222/#225: предзагрузка стикера в офлайн-кеш при отображении.
+                                // #STICKER-LOTTIE: animatedDisplayUrl теперь НЕ skip'ит
+                                // Lottie → renderUrl может быть .tgs/.json. Для Lottie
+                                // Coil не годится (не декодирует) → ниже ветка на
+                                // AnimatedStickerView (lottie-compose). Для GIF/WebP —
+                                // Coil с GifDecoder/AnimatedWebPDecoder (как раньше).
+                                // Fix #221/#225: предзагрузка стикера в офлайн-кеш при отображении.
                                 // Кешируем sendImageUrl (прозрачный PNG, без фона) — именно он
                                 // используется при отправке как картинка. displayUrl (с фоном)
                                 // используется только для отображения в пикере через AsyncImage.
@@ -10990,6 +11292,7 @@ private fun EmojiStickerPanel(
                                 LaunchedEffect(sticker.stickerId, preloadUrl) {
                                     onStickerDisplayed(sticker.stickerId, preloadUrl)
                                 }
+                                val renderUrl = sticker.animatedDisplayUrl ?: url
                                 if (renderUrl != null) {
                                     // Fix #221: визуальная индикация состояния стикера.
                                     //   active=true, purchased=true → обычный стикер
@@ -11013,18 +11316,35 @@ private fun EmojiStickerPanel(
                                             .padding(4.dp),
                                         contentAlignment = Alignment.Center,
                                     ) {
-                                        AsyncImage(
-                                            model = renderUrl,
-                                            contentDescription = null,
-                                            modifier = Modifier
-                                                .size(56.dp)
-                                                .graphicsLayer(alpha = dimAlpha),
-                                        )
+                                        // #STICKER-LOTTIE: TGS/.json — AnimatedStickerView
+                                        // (lottie-compose). Размер 56 — совпадает с AsyncImage
+                                        // (PNG/GIF/WebP) → визуальная консистентность в пикере.
+                                        // dimAlpha применяется к AnimatedStickerView через
+                                        // graphicsLayer — как и к AsyncImage (для !isActive /
+                                        // !isPurchased затемнения).
+                                        if (sticker.isLottie && sticker.animationUrl != null) {
+                                            re.pinok.ui.components.AnimatedStickerView(
+                                                url = sticker.animationUrl,
+                                                sizeDp = 56,
+                                                modifier = Modifier.graphicsLayer(alpha = dimAlpha),
+                                            )
+                                        } else {
+                                            AsyncImage(
+                                                model = renderUrl,
+                                                contentDescription = null,
+                                                modifier = Modifier
+                                                    .size(56.dp)
+                                                    .graphicsLayer(alpha = dimAlpha),
+                                            )
+                                        }
                                         // Fix #229: бейдж ▶ для анимированных стикеров
                                         // (видно, что стикер заиграет при отправке/в чате).
                                         // Fix #233 (sticker-badge): ранее Text("▶", fontSize=8.sp) —
                                         // 8.sp ≈ 17px на телефоне, почти невидно. Теперь Icon(PlayArrow)
                                         // 14.dp в цветном круге — чётко виден.
+                                        // #STICKER-LOTTIE: isAnimated теперь включает Lottie
+                                        // (animatedDisplayUrl не skip'ит .tgs/.json) → ▶ виден
+                                        // и для TGS-стикеров, не только для GIF/WebP.
                                         if (sticker.isAnimated && isActive && isPurchased) {
                                             Box(
                                                 modifier = Modifier

@@ -1792,8 +1792,10 @@ private fun StickerPickerSheet(
                     ) {
                         gridItems(currentStickers, key = { it.stickerId }) { sticker ->
                             val url = sticker.displayUrl
-                            // Fix #229: animatedDisplayUrl фильтрует .json/.tgs (Lottie),
-                            // которые Coil не умеет декодировать — fallback на статичный url.
+                            // #STICKER-LOTTIE: animatedDisplayUrl больше НЕ фильтрует .json/.tgs
+                            // (Models.kt — теперь Lottie рендерится через lottie-compose). Для
+                            // Lottie Coil не годится → ветка на AnimatedStickerView. Для GIF/WebP —
+                            // Coil с GifDecoder/AnimatedWebPDecoder (как раньше).
                             val renderUrl = sticker.animatedDisplayUrl ?: url
                             val dimAlpha = when {
                                 !isPurchased -> 0.4f
@@ -1808,7 +1810,16 @@ private fun StickerPickerSheet(
                                     .padding(4.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                if (renderUrl != null) {
+                                // #STICKER-LOTTIE: TGS/.json → AnimatedStickerView (lottie-compose),
+                                // иначе AsyncImage (Coil GIF/WebP/PNG). Размер 56 = AsyncImage
+                                // (визуальная консистентность). dimAlpha через graphicsLayer.
+                                if (sticker.isLottie && sticker.animationUrl != null) {
+                                    re.pinok.ui.components.AnimatedStickerView(
+                                        url = sticker.animationUrl,
+                                        sizeDp = 56,
+                                        modifier = Modifier.graphicsLayer(alpha = dimAlpha),
+                                    )
+                                } else if (renderUrl != null) {
                                     AsyncImage(
                                         model = renderUrl,
                                         contentDescription = null,

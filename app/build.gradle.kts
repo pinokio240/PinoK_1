@@ -214,6 +214,12 @@ dependencies {
     // SvgDecoder картинки реакций не декодировались, оставался юникод-фолбек.
     implementation(libs.coil.svg)
 
+    // #STICKER-LOTTIE: lottie-compose — рендер VK TGS-стикеров (gzipped Lottie JSON).
+    // Coil не декодирует Lottie → .tgs/.json пропускался и стикер рисовался
+    // статичным PNG. AnimatedStickerView скачивает .tgs, gunzip, парсит
+    // LottieComposition, проигрывает через LottieAnimation (loop forever).
+    implementation(libs.lottie.compose)
+
     // Gson
     implementation(libs.gson)
 
