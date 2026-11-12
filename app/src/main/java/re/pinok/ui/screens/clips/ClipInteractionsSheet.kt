@@ -68,6 +68,7 @@ import re.pinok.data.model.Video
 import re.pinok.ui.components.ShareSheet
 import re.pinok.ui.screens.feed.CommentItem
 import re.pinok.util.AppLog
+import re.pinok.util.toCountString
 
 private const val TAG = "ClipInteractionsSheet"
 
@@ -428,7 +429,7 @@ fun ClipCommentsSheet(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "Комментарии · ${clip.commentsCount}",
+                    text = "Комментарии · ${clip.commentsCount.toCountString()}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),

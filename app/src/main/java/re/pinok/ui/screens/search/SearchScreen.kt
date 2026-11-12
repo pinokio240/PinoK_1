@@ -57,6 +57,7 @@ import re.pinok.data.model.SearchHint
 import re.pinok.data.model.UserProfile
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
+import re.pinok.util.toCountString
 
 private enum class SearchTab(val label: String) {
     HINTS("Подсказки"),
@@ -548,7 +549,7 @@ private fun GroupRow(group: Group, onGroupClick: (Long) -> Unit) {
                 }
             }
             Text(
-                text = "${group.typeLabel} • ${group.membersCount} уч.",
+                text = "${group.typeLabel} • ${group.membersCount.toCountString()} уч.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

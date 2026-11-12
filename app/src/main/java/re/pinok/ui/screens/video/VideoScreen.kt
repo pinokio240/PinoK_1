@@ -84,6 +84,7 @@ import re.pinok.media.VideoDownloadManager
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.util.AppLog
+import re.pinok.util.toCountString
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1826,7 +1827,7 @@ private fun formatViews(views: Int): String {
     return when {
         views >= 1_000_000 -> "%.1fM".format(views / 1_000_000.0)
         views >= 1_000 -> "%.1fK".format(views / 1_000.0)
-        else -> views.toString()
+        else -> views.toCountString()
     }
 }
 

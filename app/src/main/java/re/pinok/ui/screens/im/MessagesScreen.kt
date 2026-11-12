@@ -114,6 +114,8 @@ import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.util.AppLog
 import re.pinok.util.linkifyVkText
 import re.pinok.util.openUrlExternal
+import re.pinok.util.toCountString
+import re.pinok.util.toCountString
 import re.pinok.util.toChatDate
 import re.pinok.util.toMsgTime
 import re.pinok.ui.components.SkeletonChatList
@@ -2794,7 +2796,7 @@ private fun ChannelRecommendationCard(
                     if (rec.membersCount > 0) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "${formatChannelRecCount(rec.membersCount)} подписчиков",
+                            text = "${rec.membersCount.toCountString()} подписчиков",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -2882,17 +2884,8 @@ private fun ChannelRecommendationCard(
     }
 }
 
-// #CHANNEL-REC: компактный формат подписчиков (как в вебе): 40 600 → «40,6K»,
-// 1 200 → «1,2K», 999 → «999», 1 200 000 → «1,2M».
-private fun formatChannelRecCount(n: Int): String {
-    if (n < 1000) return n.toString()
-    if (n < 1_000_000) {
-        val k = n / 1000.0
-        return if (k >= 100) "${k.toInt()}K" else String.format("%.1fK", k)
-    }
-    val m = n / 1_000_000.0
-    return if (m >= 100) "${m.toInt()}M" else String.format("%.1fM", m)
-}
+// #CHANNEL-REC: formatChannelRecCount убран — заменён на canonical
+// Int.toCountString() из FormatUtils (тот же K/M-формат, единая функция).
 
 /**
  * P3.3: FolderTabRow — скролляемый ряд динамических табов для папок диалогов.

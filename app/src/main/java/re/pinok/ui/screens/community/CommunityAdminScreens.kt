@@ -103,6 +103,7 @@ import re.pinok.data.model.Post
 import re.pinok.data.model.UserProfile
 import re.pinok.ui.components.ErrorView
 import re.pinok.util.AppLog
+import re.pinok.util.toCountString
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -964,7 +965,7 @@ fun AdminStatsScreenLegacy(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
-                                        text = "охват ${r.reach} · подписчики ${r.reachSubscribers} · лайки ${r.likes}",
+                                        text = "охват ${r.reach.toCountString()} · подписчики ${r.reachSubscribers.toCountString()} · лайки ${r.likes.toCountString()}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )

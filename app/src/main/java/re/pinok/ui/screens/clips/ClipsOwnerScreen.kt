@@ -52,6 +52,7 @@ import coil3.compose.AsyncImage
 import re.pinok.SovaApp
 import re.pinok.data.model.Video
 import re.pinok.util.AppLog
+import re.pinok.util.toCountString
 
 private const val TAG = "ClipsOwnerScreen"
 private const val CLIPS_COUNT = 30
@@ -226,7 +227,7 @@ private fun ClipsOwnerCard(
             }
             if (video.views > 0) {
                 Text(
-                    "${video.views} просмотров",
+                    "${video.views.toCountString()} просмотров",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -117,6 +117,7 @@ import re.pinok.ui.theme.BoardAccent
 import re.pinok.util.AppLog
 import re.pinok.util.buildBoardCommentText
 import re.pinok.util.toBoardCommentDate
+import re.pinok.util.toCountString
 
 /** Размер страницы комментариев (VK web: count=20). */
 private const val PAGE_SIZE = 20
@@ -2259,7 +2260,7 @@ private fun BoardCommentCard(
                         }
                         if (comment.likesCount > 0) {
                             Text(
-                                text = "${comment.likesCount}",
+                                text = "${comment.likesCount.toCountString()}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (comment.isLiked) Color(0xFFE64646)
                                         else Color(0xFF99A2AD),

@@ -71,6 +71,7 @@ import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Video
 import re.pinok.data.model.VideoAlbum
+import re.pinok.util.toCountString
 import re.pinok.util.toDurationString
 
 /**
@@ -684,7 +685,7 @@ private fun VideoSearchResultRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${video.duration.toDurationString()} • ${video.views} просм.",
+                text = "${video.duration.toDurationString()} • ${video.views.toCountString()} просм.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

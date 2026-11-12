@@ -85,6 +85,7 @@ import re.pinok.data.model.Track
 import re.pinok.data.model.Video
 import re.pinok.data.model.VideoAlbum
 import re.pinok.util.AppLog
+import re.pinok.util.toCountString
 import re.pinok.util.toDurationString
 
 /**
@@ -1126,7 +1127,7 @@ private fun VideoRow(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                text = "${video.duration.toDurationString()} • ${video.views} просм.",
+                text = "${video.duration.toDurationString()} • ${video.views.toCountString()} просм.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,

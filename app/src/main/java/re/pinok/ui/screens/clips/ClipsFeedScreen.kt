@@ -86,6 +86,7 @@ import re.pinok.media.VideoPlayerConfig
 import re.pinok.ui.screens.videoplayer.VideoDownloadSheet
 import re.pinok.util.AppLog
 import re.pinok.util.VkUserAgent
+import re.pinok.util.toCountString
 
 private const val TAG = "ClipsFeedScreen"
 
@@ -896,7 +897,7 @@ private fun ClipPlayerItem(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "${formatCount(clip.views)} просмотров",
+                    text = "${clip.views.toCountString()} просмотров",
                     color = Color.White.copy(alpha = 0.75f),
                     fontSize = 11.sp,
                 )

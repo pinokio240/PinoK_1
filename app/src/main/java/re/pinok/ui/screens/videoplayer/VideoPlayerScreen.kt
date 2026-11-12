@@ -196,6 +196,7 @@ import re.pinok.util.HevcSupport
 import re.pinok.util.VkUserAgent
 import re.pinok.util.linkifyVkText
 import re.pinok.util.openUrlExternal
+import re.pinok.util.toCountString
 import androidx.compose.material.icons.outlined.VerifiedUser
 
 // ── AnimatedVisibility wrapper — обходит ColumnScope ambiguity ──
@@ -3216,7 +3217,7 @@ fun VideoPlayerScreen(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = if (resolvedVideo.views > 0) "${resolvedVideo.views} просмотров" else "Нет просмотров",
+                    text = if (resolvedVideo.views > 0) "${resolvedVideo.views.toCountString()} просмотров" else "Нет просмотров",
                     style = MaterialTheme.typography.bodyMedium,
                     color = VK_TEXT_SECONDARY,
                     fontSize = 14.sp,
@@ -3740,7 +3741,7 @@ private fun VideoActionsRow(
             if (video.commentsCount > 0) {
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
-                    text = video.commentsCount.toString(),
+                    text = video.commentsCount.toCountString(),
                     style = MaterialTheme.typography.bodyMedium,
                     color = subTextColor,
                     fontSize = 14.sp,
@@ -3829,7 +3830,7 @@ private fun VideoActionsRow(
             )
             Spacer(modifier = Modifier.width(4.dp))
             Text(
-                text = video.views.toString(),
+                text = video.views.toCountString(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = subTextColor,
                 fontSize = 14.sp,
@@ -3884,7 +3885,7 @@ private fun ImmersiveVideoActionsColumn(
         // Счётчик комментариев — из video.get; 0/отсутствие = иконка без числа.
         VideoStripAction(
             icon = Icons.Outlined.ChatBubbleOutline,
-            label = if (video.commentsCount > 0) video.commentsCount.toString() else "",
+            label = if (video.commentsCount > 0) video.commentsCount.toCountString() else "",
             tint = VK_WHITE,
             contentDescription = "Комментарии",
             onClick = onOpenComments,
@@ -3933,7 +3934,7 @@ private fun ImmersiveVideoActionsColumn(
         }
         VideoStripAction(
             icon = Icons.Outlined.Visibility,
-            label = video.views.toString(),
+            label = video.views.toCountString(),
             tint = VK_WHITE,
             contentDescription = "Просмотры",
             onClick = null,
@@ -4168,7 +4169,7 @@ private fun VideoCommentsSheet(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "Комментарии · ${video.commentsCount}",
+                    text = "Комментарии · ${video.commentsCount.toCountString()}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),

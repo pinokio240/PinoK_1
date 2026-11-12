@@ -80,6 +80,7 @@ import re.pinok.media.PlayerConnection
 import re.pinok.ui.components.PostCard as UnifiedPostCard
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
+import re.pinok.util.toCountString
 import re.pinok.util.toDurationString
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -1009,7 +1010,7 @@ private fun BookmarkVideoCard(
                     overflow = TextOverflow.Ellipsis,
                 )
                 // «19 415 просмотров» — video.views; затем дата добавления.
-                val viewsText = if (video.views > 0) "${formatCount(video.views)} просмотров" else ""
+                val viewsText = if (video.views > 0) "${video.views.toCountString()} просмотров" else ""
                 val meta = listOf(viewsText, formatDate(bm.addedDate))
                     .filter { it.isNotEmpty() }
                     .joinToString(" • ")
