@@ -557,6 +557,8 @@ fun MusicScreen(
                                         cardColor = vkCard,
                                         textColor = vkTextPrimary,
                                         secondaryColor = vkTextSecondary,
+                                        // #AUDIO-SEARCH-ARTIST-OPEN: тап → экран артиста.
+                                        onClick = { onOpenArtist(artist.domain ?: artist.name, artist.name) },
                                     )
                                 }
                             }
@@ -597,6 +599,8 @@ fun MusicScreen(
                                         cardColor = vkCard,
                                         textColor = vkTextPrimary,
                                         secondaryColor = vkTextSecondary,
+                                        // #AUDIO-SEARCH-PLAYLIST-OPEN: тап → PlaylistDetailScreen.
+                                        onClick = { onOpenPlaylist(pl.ownerId, pl.id, pl.accessKey) },
                                     )
                                 }
                             }
@@ -3356,12 +3360,16 @@ private fun SearchArtistCard(
     cardColor: Color,
     textColor: Color,
     secondaryColor: Color,
+    // #AUDIO-SEARCH-ARTIST-OPEN: тап по карточке артиста в результатах поиска
+    // → onOpenArtist (экран артиста). Раньше clickable не было → не открывалось.
+    onClick: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
             .width(88.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(cardColor)
+            .clickable(onClick = onClick)
             .padding(10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -3426,6 +3434,10 @@ private fun SearchPlaylistCard(
     cardColor: Color,
     textColor: Color,
     secondaryColor: Color,
+    // #AUDIO-SEARCH-PLAYLIST-OPEN: тап по карточке плейлиста в результатах поиска
+    // → onOpenPlaylist (навигация на PlaylistDetailScreen). Раньше карточка была
+    // чисто отображающей (без clickable) → плейлист не открывался.
+    onClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     Column(
@@ -3433,6 +3445,7 @@ private fun SearchPlaylistCard(
             .width(140.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(cardColor)
+            .clickable(onClick = onClick)
             .padding(10.dp),
     ) {
         Box(
