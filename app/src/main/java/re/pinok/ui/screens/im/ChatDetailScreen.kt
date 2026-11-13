@@ -7023,19 +7023,24 @@ private fun MessageBubble(
                     // (AnimatedStickerView) — Coil Lottie не декодирует. GIF/animated-WebP
                     // по-прежнему через AsyncImage (coil-gif). Lottie-URL НЕ отдаём в
                     // resolvedAnimUrl — он пойдёт отдельной веткой ниже.
-                    val isLottieSticker = enrichedAnimUrl?.let { u ->
-                        val l = u.substringBefore('?').substringAfterLast('/').lowercase()
-                        l.endsWith(".tgs") || l.endsWith(".json")
-                    } ?: false
+                    // Захватываем non-null Lottie-URL одним проходом: lottieUrl != null
+                    // означает isLottie (раньше было `if (isLottieSticker && enrichedAnimUrl
+                    // != null)` — enrichedAnimUrl != null всегда true т.к. isLottieSticker
+                    // вычисляется через enrichedAnimUrl?.let ?: false → warning «always true»).
+                    val lottieUrl: String? = if (enrichedAnimUrl != null) {
+                        val l = enrichedAnimUrl.substringBefore('?').substringAfterLast('/').lowercase()
+                        if (l.endsWith(".tgs") || l.endsWith(".json")) enrichedAnimUrl else null
+                    } else null
+                    val isLottieSticker = lottieUrl != null
                     val resolvedAnimUrl: String? = if (isLottieSticker) null else enrichedAnimUrl
                     val isAnimatedSticker = isLottieSticker || resolvedAnimUrl != null
-                    if (isLottieSticker && enrichedAnimUrl != null) {
+                    if (lottieUrl != null) {
                         // Lottie-стикер: TGS/.json рендерит AnimatedStickerView (gunzip +
                         // LottieComposition + LottieAnimation loop). composition кешируется
                         // по URL — повторные показы при скролле не парсят JSON заново.
                         Box(contentAlignment = Alignment.Center) {
                             re.pinok.ui.components.AnimatedStickerView(
-                                url = enrichedAnimUrl,
+                                url = lottieUrl,
                                 sizeDp = 128,
                             )
                             // Fix #233 (sticker-badge): ▶ индикатор на анимированных
