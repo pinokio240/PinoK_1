@@ -1813,9 +1813,12 @@ private fun StickerPickerSheet(
                                 // #STICKER-LOTTIE: TGS/.json → AnimatedStickerView (lottie-compose),
                                 // иначе AsyncImage (Coil GIF/WebP/PNG). Размер 56 = AsyncImage
                                 // (визуальная консистентность). dimAlpha через graphicsLayer.
-                                if (sticker.isLottie && sticker.animationUrl != null) {
+                                // Smart-cast fix: sticker.animationUrl — public property из :core/data,
+                                // захватываем в локальный val (как fresh.url ранее).
+                                val sAnimUrl = sticker.animationUrl
+                                if (sticker.isLottie && sAnimUrl != null) {
                                     re.pinok.ui.components.AnimatedStickerView(
-                                        url = sticker.animationUrl,
+                                        url = sAnimUrl,
                                         sizeDp = 56,
                                         modifier = Modifier.graphicsLayer(alpha = dimAlpha),
                                     )

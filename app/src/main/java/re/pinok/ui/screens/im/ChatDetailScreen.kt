@@ -11322,9 +11322,13 @@ private fun EmojiStickerPanel(
                                         // dimAlpha применяется к AnimatedStickerView через
                                         // graphicsLayer — как и к AsyncImage (для !isActive /
                                         // !isPurchased затемнения).
-                                        if (sticker.isLottie && sticker.animationUrl != null) {
+                                        // Smart-cast fix: sticker.animationUrl — public property из
+                                        // :core/data, захватываем в локальный val (иначе компилятор
+                                        // не смарт-кастит к non-null для url = sticker.animationUrl).
+                                        val sAnimUrl = sticker.animationUrl
+                                        if (sticker.isLottie && sAnimUrl != null) {
                                             re.pinok.ui.components.AnimatedStickerView(
-                                                url = sticker.animationUrl,
+                                                url = sAnimUrl,
                                                 sizeDp = 56,
                                                 modifier = Modifier.graphicsLayer(alpha = dimAlpha),
                                             )
