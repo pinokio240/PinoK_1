@@ -2031,11 +2031,11 @@ fun FeedScreen(
                                 if (p.fromId < 0) onGroupClickSavePos(-p.fromId)
                                 else onUserClickSavePos(p.fromId)
                             },
-                            // AUTHOR-STRIP: клик на полоску → стена, где ЛЕЖИТ пост
-                            // (ownerId, не fromId): user → профиль, group → сообщество.
+                            // AUTHOR-STRIP: «Перейти к посту» — открываем сам пост (PostDetail),
+                            // а не стену владельца (раньше вёл в группу/профиль).
                             onPostContextClick = { p ->
-                                if (p.ownerId > 0) onUserClickSavePos(p.ownerId)
-                                else onGroupClickSavePos(-p.ownerId)
+                                PostHolder.lastGroups = groups
+                                onPostClickSavePos(p)
                             },
                             onPostClick = onPostClickSavePos,
                             onPhotoClick = { urls, index ->
@@ -2104,12 +2104,10 @@ fun FeedScreen(
                             onUserClickSavePos(clickedPost.fromId)
                         }
                     },
-                    // AUTHOR-STRIP: клик на полоску → стена, где ЛЕЖИТ пост (ownerId).
-                    // fromId = автор (кто написал), ownerId = стена (где лежит) —
-                    // это могут быть разные сущности (юзер пишет на стене группы).
+                    // AUTHOR-STRIP: «Перейти к посту» — открываем сам пост (PostDetail).
                     onPostContextClick = { p ->
-                        if (p.ownerId > 0) onUserClickSavePos(p.ownerId)
-                        else onGroupClickSavePos(-p.ownerId)
+                        PostHolder.lastGroups = groups
+                        onPostClickSavePos(p)
                     },
                     // Fix #71: тап по тексту поста → детальный экран.
                     // Fix: пробрасываем группы в PostHolder для имени сообщества в PostDetailScreen.
