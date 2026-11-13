@@ -3380,23 +3380,16 @@ fun VideoPlayerScreen(
     // Причина НЕ выбирается (не знаем честно): video.report с reason=5 —
     // дефолт метода («прочее»), см. VKApiClient :4148.
     if (showReportConfirm) {
-        AlertDialog(
-            onDismissRequest = { showReportConfirm = false },
-            title = { Text("Пожаловаться") },
-            text = { Text("Отправить жалобу на видео?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showReportConfirm = false
-                    sendVideoReport()
-                }) {
-                    Text("Отправить")
-                }
+        re.pinok.ui.components.ConfirmDialog(
+            title = "Пожаловаться",
+            text = "Отправить жалобу на видео?",
+            confirmLabel = "Отправить",
+            danger = false,
+            onConfirm = {
+                showReportConfirm = false
+                sendVideoReport()
             },
-            dismissButton = {
-                TextButton(onClick = { showReportConfirm = false }) {
-                    Text("Отмена")
-                }
-            },
+            onDismiss = { showReportConfirm = false },
         )
     }
 }

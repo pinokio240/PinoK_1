@@ -2299,13 +2299,7 @@ fun FeedScreen(
             photos = viewer.first,
             initial = viewer.second,
             onDismiss = { photoViewerState.value = null },
-            onShare = { url ->
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, url)
-                }
-                photoShareContext.startActivity(Intent.createChooser(send, "Поделиться"))
-            },
+            onShare = { url -> re.pinok.ui.components.shareUrl(photoShareContext, url) },
             onSendToChat = { url -> shareToChatUrl = url },
         )
     }

@@ -3049,11 +3049,7 @@ fun CommunityScreen(
                         onClick = {
                             val url = "https://vk.com/topic-${groupId}_${menuTopic.id}"
                             showTopicMenu = null
-                            val send = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, url)
-                            }
-                            ctx.startActivity(Intent.createChooser(send, "Поделиться"))
+                            re.pinok.ui.components.shareUrl(ctx, url)
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Поделиться") }
@@ -3087,29 +3083,21 @@ fun CommunityScreen(
     // B-C: подтверждение удаления темы.
     val delTopic = deleteTopicTarget
     if (delTopic != null) {
-        AlertDialog(
-            onDismissRequest = { deleteTopicTarget = null },
-            title = { Text("Удалить тему?") },
-            text = {
-                Text("Тема «${delTopic.title}» будет удалена без возможности восстановления.")
+        re.pinok.ui.components.ConfirmDialog(
+            title = "Удалить тему?",
+            text = "Тема «${delTopic.title}» будет удалена без возможности восстановления.",
+            confirmLabel = "Удалить",
+            onConfirm = {
+                val target = delTopic
+                deleteTopicTarget = null
+                scope.launch {
+                    val ok = app.apiClient.boardDeleteTopic(groupId, target.id)
+                    if (ok) {
+                        topicsState.removeById("topic_${groupId}_${target.id}")
+                    }
+                }
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val target = delTopic
-                        deleteTopicTarget = null
-                        scope.launch {
-                            val ok = app.apiClient.boardDeleteTopic(groupId, target.id)
-                            if (ok) {
-                                topicsState.removeById("topic_${groupId}_${target.id}")
-                            }
-                        }
-                    },
-                ) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { deleteTopicTarget = null }) { Text("Отмена") }
-            },
+            onDismiss = { deleteTopicTarget = null },
         )
     }
 
@@ -3129,13 +3117,7 @@ fun CommunityScreen(
             photos = viewer.first,
             initial = viewer.second,
             onDismiss = { photoViewerState.value = null },
-            onShare = { url ->
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, url)
-                }
-                shareContext.startActivity(Intent.createChooser(send, "Поделиться"))
-            },
+            onShare = { url -> re.pinok.ui.components.shareUrl(shareContext, url) },
             onSendToChat = { url -> shareToChatUrl = url },
         )
     }

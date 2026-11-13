@@ -6224,13 +6224,7 @@ fun ChatDetailScreen(
             photos = pendingPhotos.map { it.uri.toString() },
             initial = pvi.coerceIn(0, pendingPhotos.lastIndex),
             onDismiss = { previewPhotoIndex = null },
-            onShare = { url ->
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, url)
-                }
-                ctx.startActivity(Intent.createChooser(send, "Поделиться"))
-            },
+            onShare = { url -> re.pinok.ui.components.shareUrl(ctx, url) },
             onSendToChat = { url -> shareToChatUrl = url },
         )
     }
@@ -6279,13 +6273,7 @@ fun ChatDetailScreen(
             photos = urls,
             initial = idx,
             onDismiss = { photoViewerState = null },
-            onShare = { url ->
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, url)
-                }
-                ctx.startActivity(Intent.createChooser(send, "Поделиться"))
-            },
+            onShare = { url -> re.pinok.ui.components.shareUrl(ctx, url) },
             onSendToChat = { url -> shareToChatUrl = url },
         )
     }

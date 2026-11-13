@@ -659,33 +659,25 @@ fun OfflineManagerScreen(
 
         // #OFFQ (2026-10-02): подтверждение очистки очереди.
         if (showClearQueueDialog) {
-            AlertDialog(
-                onDismissRequest = { showClearQueueDialog = false },
-                title = { Text("Очистить очередь?") },
-                text = {
-                    Text(
-                        buildString {
-                            append("Из очереди будут убраны $queuePendingCount ожидающих трек(ов). ")
-                            append("Текущая загрузка не прервётся, уже скачанное сохранится.")
-                        },
-                    )
+            re.pinok.ui.components.ConfirmDialog(
+                title = "Очистить очередь?",
+                text = buildString {
+                    append("Из очереди будут убраны $queuePendingCount ожидающих трек(ов). ")
+                    append("Текущая загрузка не прервётся, уже скачанное сохранится.")
                 },
-                confirmButton = {
-                    TextButton(onClick = {
-                        showClearQueueDialog = false
-                        val cleared = TrackDownloadManager.getQueueSize()
-                        TrackDownloadManager.clearPendingQueue()
-                        queuePaused = TrackDownloadManager.isPaused()
-                        Toast.makeText(
-                            context,
-                            if (cleared > 0) "Очередь очищена: $cleared трек(ов)" else "Очередь уже пуста",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                    }) { Text("Очистить") }
+                confirmLabel = "Очистить",
+                onConfirm = {
+                    showClearQueueDialog = false
+                    val cleared = TrackDownloadManager.getQueueSize()
+                    TrackDownloadManager.clearPendingQueue()
+                    queuePaused = TrackDownloadManager.isPaused()
+                    Toast.makeText(
+                        context,
+                        if (cleared > 0) "Очередь очищена: $cleared трек(ов)" else "Очередь уже пуста",
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 },
-                dismissButton = {
-                    TextButton(onClick = { showClearQueueDialog = false }) { Text("Отмена") }
-                },
+                onDismiss = { showClearQueueDialog = false },
             )
         }
 

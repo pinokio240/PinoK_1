@@ -2740,21 +2740,7 @@ private fun ChannelRecommendationCard(
     // #CHANNEL-UI2 (Task 3): системный шаринг ссылки через ACTION_SEND
     // chooser (паттерн TrackShare.shareTrack).
     fun shareChannelLink() {
-        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(android.content.Intent.EXTRA_TEXT, channelLink)
-        }
-        val chooser = android.content.Intent.createChooser(intent, "Поделиться").apply {
-            if (cardContext !is android.app.Activity) {
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-        }
-        try {
-            cardContext.startActivity(chooser)
-        } catch (e: Exception) {
-            AppLog.w("MessagesScreen", "#CHANNEL-UI2: share channel failed: ${e.message}")
-            Toast.makeText(cardContext, "Не удалось поделиться", Toast.LENGTH_SHORT).show()
-        }
+        re.pinok.ui.components.shareUrl(cardContext, channelLink)
     }
 
     Card(

@@ -263,11 +263,7 @@ fun Music2TrackRow(
                         onClick = {
                             menuExpanded = false
                             val shareText = "${track.artist} — ${track.title}"
-                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, shareText)
-                            }
-                            context.startActivity(Intent.createChooser(shareIntent, "Поделиться треком"))
+                            re.pinok.ui.components.shareUrl(context, shareText, "Поделиться треком")
                         },
                     )
                 }

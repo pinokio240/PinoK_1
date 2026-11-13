@@ -2234,13 +2234,7 @@ fun ProfileScreen(
             photos = viewer.first,
             initial = viewer.second,
             onDismiss = { photoViewerState.value = null },
-            onShare = { url ->
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, url)
-                }
-                context.startActivity(Intent.createChooser(send, "Поделиться"))
-            },
+            onShare = { url -> re.pinok.ui.components.shareUrl(context, url) },
             onSendToChat = { url -> shareToChatUrl = url },
         )
     }

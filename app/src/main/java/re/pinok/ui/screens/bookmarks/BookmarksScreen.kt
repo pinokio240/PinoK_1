@@ -501,59 +501,29 @@ fun BookmarksScreen(
 
     // S6-3: AlertDialog подтверждения удаления серверной закладки.
     removeTarget?.let { bm ->
-        AlertDialog(
-            onDismissRequest = { removeTarget = null },
-            title = { Text("Удалить из закладок?") },
-            text = {
-                Text(
-                    text = bm.title.ifBlank { typeLabel(bm.type) },
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+        re.pinok.ui.components.ConfirmDialog(
+            title = "Удалить из закладок?",
+            text = bm.title.ifBlank { typeLabel(bm.type) },
+            confirmLabel = "Удалить",
+            onConfirm = {
+                removeTarget = null
+                removeBookmark(bm)
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    removeTarget = null
-                    removeBookmark(bm)
-                }) {
-                    Text("Удалить", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { removeTarget = null }) {
-                    Text("Отмена")
-                }
-            },
+            onDismiss = { removeTarget = null },
         )
     }
 
     // Волна 40: AlertDialog подтверждения удаления локальной закладки трека.
     removeTrackTarget?.let { tr ->
-        AlertDialog(
-            onDismissRequest = { removeTrackTarget = null },
-            title = { Text("Удалить трек из закладок?") },
-            text = {
-                Text(
-                    text = "${tr.title} — ${tr.artist}",
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+        re.pinok.ui.components.ConfirmDialog(
+            title = "Удалить трек из закладок?",
+            text = "${tr.title} — ${tr.artist}",
+            confirmLabel = "Удалить",
+            onConfirm = {
+                removeTrackTarget = null
+                removeBookmarkedTrack(tr)
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    removeTrackTarget = null
-                    removeBookmarkedTrack(tr)
-                }) {
-                    Text("Удалить", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { removeTrackTarget = null }) {
-                    Text("Отмена")
-                }
-            },
+            onDismiss = { removeTrackTarget = null },
         )
     }
 

@@ -672,13 +672,7 @@ fun PostDetailScreen(
             photos = photos,
             initial = startIndex,
             onDismiss = { photoViewerState.value = null },
-            onShare = { url ->
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, url)
-                }
-                ctx.startActivity(Intent.createChooser(send, "Поделиться"))
-            },
+            onShare = { url -> re.pinok.ui.components.shareUrl(ctx, url) },
             onSendToChat = { url -> shareToChatUrl = url },
         )
         // PHOTO-SHARE-WIRE: ShareToChatSheet для «Отправить» — рендерим в этом же
@@ -1543,13 +1537,7 @@ fun PostDetailScreen(
             photos = pendingCommentPhotos.map { it.uri.toString() },
             initial = pvi.coerceIn(0, pendingCommentPhotos.lastIndex),
             onDismiss = { previewPhotoIndex = null },
-            onShare = { url ->
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, url)
-                }
-                ctx.startActivity(Intent.createChooser(send, "Поделиться"))
-            },
+            onShare = { url -> re.pinok.ui.components.shareUrl(ctx, url) },
             onSendToChat = { url -> shareToChatUrl = url },
         )
     }

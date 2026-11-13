@@ -312,42 +312,34 @@ fun DevicesScreen(
 
     // Confirm dialog для "Завершить все".
     if (showConfirmResetAll) {
-        AlertDialog(
-            onDismissRequest = { showConfirmResetAll = false },
-            title = { Text("Завершить все сессии?") },
-            text = {
-                Text(
-                    "Все другие устройства будут выходы из аккаунта VK. " +
-                        "Текущая сессия PinoK останется активной. " +
-                        "VK может потребовать подтвердить действие кодом.",
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showConfirmResetAll = false
-                    // Сначала пробуем без verification.
-                    scope.launch {
-                        val hash = runCatching { app.tokenStorage.logoutHash() }.getOrNull()
-                        val currentDeviceId = runCatching { app.tokenStorage.deviceId() }.getOrNull()
-                        val ok = app.apiClient.accountResetAllSessions(
-                            hash = hash,
-                            excludeDeviceId = currentDeviceId,
-                        )
-                        if (ok) {
-                            Toast.makeText(context, "Все сессии завершены", Toast.LENGTH_SHORT).show()
-                            val refreshed = app.apiClient.accountGetActivityHistoryDevices(hash)
-                            if (refreshed != null) {
-                                uiState = DevicesUiState.Content(refreshed)
-                            }
-                        } else {
-                            pendingReset = PendingReset.All
+        re.pinok.ui.components.ConfirmDialog(
+            title = "Завершить все сессии?",
+            text = "Все другие устройства будут выходы из аккаунта VK. " +
+                "Текущая сессия PinoK останется активной. " +
+                "VK может потребовать подтвердить действие кодом.",
+            confirmLabel = "Завершить",
+            onConfirm = {
+                showConfirmResetAll = false
+                // Сначала пробуем без verification.
+                scope.launch {
+                    val hash = runCatching { app.tokenStorage.logoutHash() }.getOrNull()
+                    val currentDeviceId = runCatching { app.tokenStorage.deviceId() }.getOrNull()
+                    val ok = app.apiClient.accountResetAllSessions(
+                        hash = hash,
+                        excludeDeviceId = currentDeviceId,
+                    )
+                    if (ok) {
+                        Toast.makeText(context, "Все сессии завершены", Toast.LENGTH_SHORT).show()
+                        val refreshed = app.apiClient.accountGetActivityHistoryDevices(hash)
+                        if (refreshed != null) {
+                            uiState = DevicesUiState.Content(refreshed)
                         }
+                    } else {
+                        pendingReset = PendingReset.All
                     }
-                }) { Text("Завершить") }
+                }
             },
-            dismissButton = {
-                TextButton(onClick = { showConfirmResetAll = false }) { Text("Отмена") }
-            },
+            onDismiss = { showConfirmResetAll = false },
         )
     }
 }

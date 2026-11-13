@@ -2376,51 +2376,36 @@ composable(Screen.CallsHistory.route) {
                     // B-BAN-2: модалка подтверждения перед accountBan автора клипа.
                     if (showBanAuthorDialog && banAuthorTargetId != null) {
                         val targetId = banAuthorTargetId!!
-                        AlertDialog(
-                            onDismissRequest = {
+                        re.pinok.ui.components.ConfirmDialog(
+                            title = "Заблокировать автора?",
+                            text = "Пользователь будет добавлен в чёрный список. " +
+                                "Он не сможет писать вам и видеть ваш профиль.",
+                            confirmLabel = "Заблокировать",
+                            onConfirm = {
+                                showBanAuthorDialog = false
+                                val tid = targetId
+                                banAuthorTargetId = null
+                                clipScope.launch {
+                                    try {
+                                        val ok = app.apiClient.accountBan(tid)
+                                        android.widget.Toast.makeText(
+                                            nav.context,
+                                            if (ok) "Автор заблокирован" else "Не удалось заблокировать",
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                        if (ok) vm.refresh()
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(
+                                            nav.context,
+                                            "Ошибка: ${e.message}",
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                }
+                            },
+                            onDismiss = {
                                 showBanAuthorDialog = false
                                 banAuthorTargetId = null
-                            },
-                            title = { Text("Заблокировать автора?") },
-                            text = {
-                                Text(
-                                    "Пользователь будет добавлен в чёрный список. " +
-                                        "Он не сможет писать вам и видеть ваш профиль.",
-                                )
-                            },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    showBanAuthorDialog = false
-                                    val tid = targetId
-                                    banAuthorTargetId = null
-                                    clipScope.launch {
-                                        try {
-                                            val ok = app.apiClient.accountBan(tid)
-                                            android.widget.Toast.makeText(
-                                                nav.context,
-                                                if (ok) "Автор заблокирован" else "Не удалось заблокировать",
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            ).show()
-                                            if (ok) vm.refresh()
-                                        } catch (e: Exception) {
-                                            android.widget.Toast.makeText(
-                                                nav.context,
-                                                "Ошибка: ${e.message}",
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            ).show()
-                                        }
-                                    }
-                                }) {
-                                    Text("Заблокировать", color = MaterialTheme.colorScheme.error)
-                                }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = {
-                                    showBanAuthorDialog = false
-                                    banAuthorTargetId = null
-                                }) {
-                                    Text("Отмена")
-                                }
                             },
                         )
                     }
@@ -3603,24 +3588,16 @@ composable(Screen.CallsHistory.route) {
         // onLogoutWithHoldersClear (сброс in-memory кэшей + mainActivity-логика:
         // longPoll stop → signOut → clearAllVkCookies + storage.clear() →
         // PendingAuthResult.clear → authVersion++ → AuthActivity).
-        AlertDialog(
-            onDismissRequest = { showLogoutDialog = false },
-            title = { Text("Выйти из аккаунта?") },
-            text = {
-                Text(
-                    "Сессия будет остановлена, куки авторизации будут очищены. " +
-                        "Потребуется повторный вход."
-                )
+        re.pinok.ui.components.ConfirmDialog(
+            title = "Выйти из аккаунта?",
+            text = "Сессия будет остановлена, куки авторизации будут очищены. " +
+                "Потребуется повторный вход.",
+            confirmLabel = "Выйти",
+            onConfirm = {
+                showLogoutDialog = false
+                onLogoutWithHoldersClear()
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    showLogoutDialog = false
-                    onLogoutWithHoldersClear()
-                }) { Text("Выйти") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showLogoutDialog = false }) { Text("Отмена") }
-            },
+            onDismiss = { showLogoutDialog = false },
         )
     }
     // #247: диалог выхода из приложения (сохраняя авторизацию).
@@ -3680,11 +3657,7 @@ composable(Screen.CallsHistory.route) {
             initial = initial,
             onDismiss = { PhotoHolder.close() },
             onShare = { url ->
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, url)
-                }
-                photoShareContext.startActivity(Intent.createChooser(send, "Поделиться"))
+                re.pinok.ui.components.shareUrl(photoShareContext, url)
             },
             onSendToChat = { url -> shareToChatUrl = url },
         )
