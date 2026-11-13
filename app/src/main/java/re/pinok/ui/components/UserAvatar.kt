@@ -79,7 +79,7 @@ fun UserAvatar(
                     .align(Alignment.BottomEnd)
                     .size(size * 0.25f)
                     .clip(CircleShape)
-                    .background(android.graphics.Color.parseColor("#4CAF50")),
+                    .background(androidx.compose.ui.graphics.Color(0xFF4CAF50)),
             )
         }
     }
