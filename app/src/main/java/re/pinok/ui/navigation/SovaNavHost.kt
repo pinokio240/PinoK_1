@@ -3605,25 +3605,14 @@ composable(Screen.CallsHistory.route) {
     // закрывает все Activity в стеке. Процесс завершается, при следующем
     // запуске SovaApp.onCreate() находит сохранённый access_token в
     // tokenStorage → пользователь сразу попадает в ленту.
-    if (showExitAppDialog) {
-        AlertDialog(
-            onDismissRequest = { showExitAppDialog = false },
-            title = { Text("Выйти из приложения?") },
-            text = {
-                Text(
-                    "Приложение будет закрыто. Авторизация сохранится — " +
-                        "при следующем запуске вы сразу попадёте в ленту.",
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showExitAppDialog = false
-                    onExitApp()
-                }) { Text("Выйти") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showExitAppDialog = false }) { Text("Отмена") }
-            },
+if (showExitAppDialog) {
+        re.pinok.ui.components.ConfirmDialog(
+            title = "Выйти из приложения?",
+            text = "Приложение будет закрыто. Авторизация сохранится — " +
+                "при следующем запуске вы сразу попадёте в ленту.",
+            confirmLabel = "Выйти",
+            onConfirm = { onExitApp() },
+            onDismiss = { showExitAppDialog = false },
         )
     }
     // #90: VideoPlayer overlay — видео рендерится поверх всего UI.
