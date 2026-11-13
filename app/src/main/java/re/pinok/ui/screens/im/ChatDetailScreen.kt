@@ -772,8 +772,15 @@ fun ChatDetailScreen(
         val now = System.currentTimeMillis()
         if (now - lastTypingSentAt < TYPING_SEND_THROTTLE_MS) return@LaunchedEffect
         lastTypingSentAt = now
-        val ok = app.apiClient.setActivity(peerId)
-        AppLog.d("ChatDetailScreen", "#TYPING-SEND setActivity peer=$peerId ok=$ok")
+        try {
+            val ok = app.apiClient.setActivity(peerId)
+            AppLog.d("ChatDetailScreen", "#TYPING-SEND setActivity peer=$peerId ok=$ok")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Refactor W1 (2026-11-13): сбой индикации не должен ронять чат — честно в лог.
+            AppLog.w("ChatDetailScreen", "#TYPING-SEND setActivity исключение: ${e.message}")
+        }
     }
     // #59: reply state — сообщение на которое отвечаем
     var replyingTo by remember { mutableStateOf<Message?>(null) }
@@ -2224,6 +2231,10 @@ fun ChatDetailScreen(
                     // (точное состояние сервера, включая disabled_forever/no_sound/
                     // disabled_until для timed mute).
                     muted = newSettings.isMuted()
+                    // #CHATINFO-VKWEB (2026-11-13): синхронизируем кэш MessageNotifier —
+                    // иначе после mute/unmute пуш-нотификации и список диалогов работают
+                    // по старому состоянию (паттерн MessagesScreen long-press mute, Fix #285).
+                    re.pinok.realtime.MessageNotifier.setMuted(peerId, muted)
                     AppLog.i("ChatDetailScreen",
                         "mute toggled: $newState untilSec=$untilSec (server-confirmed: ${muted})")
                     Toast.makeText(
@@ -3997,16 +4008,21 @@ fun ChatDetailScreen(
                             // перечёркнутый колокольчик, чтобы пользователь сразу
                             // видел что уведомления выключены (как в нативном VK).
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                // #CHATINFO-VKWEB (2026-11-13): тап по имени/заголовку чата
+                                // открывает профиль беседы (как в VK web). Раньше имя было
+                                // не кликабельным, а ChatInfoScreen открывался только через ⋮.
                                 Text(
                                     text = currentTitle,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Medium,
-                                    // weight(fill=false): имя занимает свободную ширину
-                                    // строки, но колокольчик не выдавливается за край —
-                                    // при длинном имени усекается само имя.
-                                    modifier = Modifier.weight(1f, fill = false),
+                                    modifier = Modifier
+                                        .weight(1f, fill = false)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .clickable {
+                                            if (chatInfoEnabled && !isChannel) onInfoClick(peerId)
+                                        },
                                 )
                                 if (muted) {
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -4132,13 +4148,6 @@ fun ChatDetailScreen(
                                         },
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("Участники") },
-                                        onClick = {
-                                            showChatMenu = false
-                                            loadMembers()
-                                        },
-                                    )
-                                    DropdownMenuItem(
                                         text = { Text("Выйти из чата") },
                                         onClick = { leaveChat() },
                                     )
@@ -4261,28 +4270,6 @@ fun ChatDetailScreen(
                                             )
                                         }
                                     }
-                                }
-                                // W30-1 #IM-UNREAD-MENU: «Отметить непрочитанным/
-                                // прочитанным» — после mute, паритет VK web (в меню
-                                // чата веба пункт есть, у нас отсутствовал). Тот же
-                                // API-флоу, что в long-press меню списка диалогов.
-                                // #IM-CHANNEL-FIX (56-b-6): для канала СКРЫТ — у канала нет
-                                // messages-непрочитанного в нашем UI (контент = wall.get,
-                                // бейдж чистится при открытии — 56-b-1).
-                                if (!isChannel) {
-                                DropdownMenuItem(
-                                    text = { Text(if (hasUnreadMark) "Отметить прочитанным" else "Отметить непрочитанным") },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Outlined.MarkChatUnread,
-                                            contentDescription = null,
-                                        )
-                                    },
-                                    onClick = {
-                                        showChatMenu = false
-                                        toggleUnreadMark()
-                                    },
-                                )
                                 }
                                 // P0.3: stub «Закрепить сообщение» удалён — теперь pin
                                 // доступен через long-press на конкретном сообщении
@@ -5852,7 +5839,9 @@ fun ChatDetailScreen(
             }
             searchResults = emptyList()
             kotlinx.coroutines.delay(600)
-            if (localResults.isEmpty() && !searching) performSearch()
+            // Refactor #15 (2026-11-13): серверный поиск ВСЕГДА (ищет по всему чату,
+            // а не только по прогруженной истории); локальная выдача — как дополнение.
+            if (!searching) performSearch()
         }
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { showSearch = false },
@@ -5890,7 +5879,7 @@ fun ChatDetailScreen(
                                 modifier = Modifier.height(300.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                items(localResults) { m ->
+                                items(localResults, key = { it.id }) { m ->
                                     Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -5931,7 +5920,7 @@ fun ChatDetailScreen(
                                 modifier = Modifier.height(300.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                items(searchResults) { result ->
+                                items(searchResults, key = { "srv_${it.messageId}_${it.date}" }) { result ->
                                     Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -6898,8 +6887,12 @@ private fun MessageBubble(
                     // копируем bodyMedium с переопределённым fontSize (в sp). Применяется
                     // только к тексту в диалогах (чатах/каналах), не трогая остальной UI.
                     val chatFontSizeOverride = LocalChatAppearance.current.fontSizeSp
+                    // Refactor W0: linkify дорогой (regex) — кэшируем по тексту сообщения.
+                    val messageText = remember(message.text, linkColor) {
+                        re.pinok.util.linkifyVkText(message.text, linkColor, onUrlClick)
+                    }
                     Text(
-                        text = re.pinok.util.linkifyVkText(message.text, linkColor, onUrlClick),
+                        text = messageText,
                         style = if (chatFontSizeOverride != null)
                             MaterialTheme.typography.bodyMedium.copy(
                                 fontSize = chatFontSizeOverride.sp,
@@ -7881,8 +7874,12 @@ private fun WallAttachmentCard(
         //     тапабельна → полный текст в PostDetailScreen). ───
         if (post.text.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
+            // Refactor W0: linkify дорогой (regex) — кэшируем по тексту поста.
+            val postText = remember(post.text, textColor) {
+                re.pinok.util.linkifyVkText(post.text, textColor, onUrlClick)
+            }
             Text(
-                text = re.pinok.util.linkifyVkText(post.text, textColor, onUrlClick),
+                text = postText,
                 style = MaterialTheme.typography.bodySmall,
                 color = textColor.copy(alpha = 0.95f),
                 maxLines = 8,
@@ -9978,10 +9975,14 @@ private fun ForwardedMessageBlock(
         // Полный текст (до 8 строк, с кликабельными ссылками).
         if (fwd.text.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
+            // Refactor W0: linkify дорогой (regex) — кэшируем по тексту вложения.
+            val fwdText = remember(fwd.text, textColor) {
+                re.pinok.util.linkifyVkText(fwd.text, textColor, onUrlClick)
+            }
             // Ссылки в пересланном сообщении тоже кликабельны — используем
             // тот же linkifyVkText, что и для основного bubble.
             Text(
-                text = re.pinok.util.linkifyVkText(fwd.text, textColor, onUrlClick),
+                text = fwdText,
                 style = MaterialTheme.typography.bodySmall,
                 color = textColor.copy(alpha = 0.95f),
             )

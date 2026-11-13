@@ -346,6 +346,7 @@ private fun statusLine(entry: CallHistoryEntry): String {
     }
     if (entry.durationSec > 0) {
         sb.append(" · ")
+        // durationSec уже в секундах.
         sb.append(entry.durationSec.toDurationString())
     }
     sb.append(" · ")

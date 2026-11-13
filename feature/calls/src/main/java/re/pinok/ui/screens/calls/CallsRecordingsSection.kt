@@ -499,6 +499,7 @@ private fun RecordingItemCard(
                         .padding(horizontal = 6.dp, vertical = 2.dp).testTag("recordings_duration_badge"),
                 ) {
                     Text(
+                        // durationSec в секундах.
                         item.durationSec.toDurationString(),
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White,

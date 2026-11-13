@@ -1652,12 +1652,17 @@ private fun ProfileInfoSection(rows: List<Pair<String, String>>) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(2.dp))
-                    Text(
-                        text = linkifyVkText(
+                    // Refactor W0: linkify дорогой (regex) — кэшируем по значению поля.
+                    val infoValueColor = MaterialTheme.colorScheme.primary
+                    val infoValueText = remember(value, infoValueColor) {
+                        linkifyVkText(
                             value,
-                            MaterialTheme.colorScheme.primary,
+                            infoValueColor,
                             onUrlClick = { url -> openUrlExternal(infoContext, url) },
-                        ),
+                        )
+                    }
+                    Text(
+                        text = infoValueText,
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }

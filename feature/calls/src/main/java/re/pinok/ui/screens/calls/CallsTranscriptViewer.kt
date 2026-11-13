@@ -237,7 +237,7 @@ private fun transcriptMetaLine(item: TranscriptItem): String {
     }
     val size = item.sizeLabel
     if (size != null) parts.add(size)
-    if (item.durationSec > 0) parts.add(item.durationSec.toDurationString())
+    if (item.durationSec > 0) parts.add(item.durationSec.toDurationString()) // durationSec в секундах
     val absolute = item.timestampSec.toAbsoluteTime()
     if (absolute.isNotBlank()) parts.add(absolute)
     return parts.joinToString(" · ")

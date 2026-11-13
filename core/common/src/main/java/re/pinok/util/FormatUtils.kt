@@ -177,3 +177,28 @@ fun Int.toCountString(): String = when {
     this >= 1_000 -> String.format(Locale.US, "%.1fK", this / 1_000.0)
     else -> this.toString()
 }
+
+// ─── Размер файла ───────────────────────────────────────────────
+
+/**
+ * Refactor W0 (2026-11-13): единый формат размера файла.
+ * Объединяет дословные копии formatBytes в OfflineManagerScreen /
+ * OfflineAudioPlayerScreen (Б/КБ/МБ/ГБ, "%.1f %s").
+ *
+ * Формат: "512 Б", "1.2 КБ", "3.4 МБ", "1.0 ГБ"; ≤0 → "0 Б".
+ */
+fun Long.toFileSizeString(): String {
+    if (this <= 0) return "0 Б"
+    val units = arrayOf("Б", "КБ", "МБ", "ГБ")
+    var value = this.toDouble()
+    var unitIndex = 0
+    while (value >= 1024 && unitIndex < units.lastIndex) {
+        value /= 1024
+        unitIndex++
+    }
+    return if (unitIndex == 0) {
+        "${this} ${units[0]}"
+    } else {
+        String.format(Locale.US, "%.1f %s", value, units[unitIndex])
+    }
+}

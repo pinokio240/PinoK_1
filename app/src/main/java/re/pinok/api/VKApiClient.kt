@@ -1317,6 +1317,13 @@ class VKApiClient(
         val isOwner: Boolean,
         val isAdmin: Boolean,
         val invitedBy: Long,
+        // #CHATINFO-VKWEB (2026-11-13): статусы участников для списка (как в снапшоте:
+        // online / заходил N минут назад / Не в сети). Парсим из online_info (VK
+        // отдаёт в items[] при fields=online) и last_seen/time.
+        val online: Boolean = false,
+        val lastSeen: Long = 0L,
+        val isBot: Boolean = false,
+        val isCommunity: Boolean = false,
     )
 
     suspend fun messagesGetConversationMembers(peerId: Long): List<ChatMember> {
@@ -1326,7 +1333,8 @@ class VKApiClient(
             // Fix #271: запрашиваем first_name,last_name,photo_100 для пользователей
             // (VK отдаёт их прямо в items[] при fields=). Для community-участников
             // (member_id < 0) эти поля отсутствуют — их берём из response.groups[].
-            "fields" to "photo_100,first_name,last_name",
+            // #CHATINFO-VKWEB: online, last_seen для статусов участников.
+            "fields" to "photo_100,first_name,last_name,online,last_seen",
         )
         val json = call("messages.getConversationMembers", args) ?: return emptyList()
         return try {
@@ -1402,6 +1410,14 @@ class VKApiClient(
                     isOwner = o.get("is_owner")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
                     isAdmin = o.get("is_admin")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
                     invitedBy = o.get("invited_by")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                    // #CHATINFO-VKWEB: статусы. online_info = {is_online, last_seen};
+                    // для сообществ/ботов ставим флаги по sign member_id / type.
+                    online = (o.get("online_info")?.takeIf { !it.isJsonNull }?.asJsonObject
+                        ?.get("is_online")?.takeIf { !it.isJsonNull }?.asBoolean ?: false),
+                    lastSeen = (o.get("online_info")?.takeIf { !it.isJsonNull }?.asJsonObject
+                        ?.get("last_seen")?.takeIf { !it.isJsonNull }?.asLong ?: 0L),
+                    isBot = memberId < 0 && (o.get("type")?.takeIf { !it.isJsonNull }?.asString == "group" || memberId < 0),
+                    isCommunity = memberId < 0,
                 )
             }
         } catch (e: Exception) {
@@ -2118,6 +2134,24 @@ class VKApiClient(
         }
     }
 
+    /** #CHATINFO-VKWEB (2026-11-13): ссылка-приглашение для обычной беседы
+     *  (peer_id >= 2e9, без group_id). messages.getInviteLink. */
+    suspend fun messagesGetInviteLink(peerId: Long): String? {
+        if (isOffline()) return null
+        val json = call("messages.getInviteLink", mapOf(
+            "peer_id" to peerId.toString(),
+            "visible_messages_count" to "250",
+            "reset" to "0",
+        ), forceWebGateway = true) ?: return null
+        return try {
+            json.getAsJsonObject("response")?.get("link")
+                ?.takeIf { !it.isJsonNull }?.asString
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "messagesGetInviteLink parse error", e)
+            null
+        }
+    }
+
     /**
      * P3.3: messages.getChatFolders — список папок диалогов пользователя.
      *
@@ -2170,18 +2204,23 @@ class VKApiClient(
         }
     }
 
-    /** messages.getHistoryAttachments — медиа-вложения диалога. */
-    suspend fun messagesGetHistoryAttachments(peerId: Long, mediaType: String = "photo", count: Int = 50): List<HistoryAttachment> {
-        if (isOffline()) return emptyList()
-        val json = call("messages.getHistoryAttachments", mapOf(
+    /** messages.getHistoryAttachments — медиа-вложения диалога.
+     *  #CHATINFO-VKWEB (2026-11-13): добавлена пагинация через start_from.
+     *  Возвращает пару (items, nextFrom) — nextFrom пустая строка = конец. */
+    suspend fun messagesGetHistoryAttachments(peerId: Long, mediaType: String = "photo", count: Int = 50, startFrom: String = ""): Pair<List<HistoryAttachment>, String> {
+        if (isOffline()) return emptyList<HistoryAttachment>() to ""
+        val args = mutableMapOf(
             "peer_id" to peerId.toString(),
             "media_type" to mediaType,
             "count" to count.toString(),
-        )) ?: return emptyList()
+        )
+        if (startFrom.isNotBlank()) args["start_from"] = startFrom
+        val json = call("messages.getHistoryAttachments", args) ?: return emptyList<HistoryAttachment>() to ""
         return try {
-            val resp = json.getAsJsonObject("response") ?: return emptyList()
-            val items = resp.getAsJsonArray("items") ?: return emptyList()
-            items.mapNotNull { el ->
+            val resp = json.getAsJsonObject("response") ?: return emptyList<HistoryAttachment>() to ""
+            val items = resp.getAsJsonArray("items") ?: return emptyList<HistoryAttachment>() to ""
+            val nextFrom = resp.get("next_from")?.takeIf { !it.isJsonNull }?.asString ?: ""
+            val parsed = items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
                 val attachment = o.getAsJsonObject("attachment") ?: return@mapNotNull null
@@ -2196,6 +2235,7 @@ class VKApiClient(
                         "video" -> attachment.getAsJsonObject("video")?.get("photo_320")?.asString
                         "audio" -> attachment.getAsJsonObject("audio")?.get("url")?.asString
                         "doc" -> attachment.getAsJsonObject("doc")?.get("url")?.asString
+                        "link" -> attachment.getAsJsonObject("link")?.get("url")?.asString
                         else -> null
                     },
                     title = when (type) {
@@ -2205,13 +2245,33 @@ class VKApiClient(
                             "${it.get("artist")?.asString ?: ""} — ${it.get("title")?.asString ?: ""}"
                         } ?: "Аудио"
                         "doc" -> attachment.getAsJsonObject("doc")?.get("title")?.asString ?: "Документ"
+                        "link" -> attachment.getAsJsonObject("link")?.get("title")?.asString
+                            ?: attachment.getAsJsonObject("link")?.get("url")?.asString ?: "Ссылка"
                         else -> type
+                    },
+                    // #CHATINFO-VKWEB: идентификаторы для открытия медиа (видео/аудио/ссылки).
+                    ownerId = when (type) {
+                        "video" -> attachment.getAsJsonObject("video")?.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong
+                        "audio" -> attachment.getAsJsonObject("audio")?.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong
+                        "doc" -> attachment.getAsJsonObject("doc")?.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong
+                        else -> null
+                    },
+                    itemId = when (type) {
+                        "video" -> attachment.getAsJsonObject("video")?.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                        "audio" -> attachment.getAsJsonObject("audio")?.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                        "doc" -> attachment.getAsJsonObject("doc")?.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                        else -> null
+                    },
+                    accessKey = when (type) {
+                        "video" -> attachment.getAsJsonObject("video")?.get("access_key")?.takeIf { !it.isJsonNull }?.asString
+                        else -> null
                     },
                 )
             }
+            parsed to nextFrom
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "messagesGetHistoryAttachments parse error", e)
-            emptyList()
+            emptyList<HistoryAttachment>() to ""
         }
     }
 
@@ -2723,6 +2783,11 @@ class VKApiClient(
         val type: String,
         val url: String?,
         val title: String,
+        // #CHATINFO-VKWEB (2026-11-13): данные для открытия медиа из вкладок профиля беседы.
+        // Видео — ownerId/itemId/accessKey; аудио/доки — url достаточно; ссылка — url.
+        val ownerId: Long? = null,
+        val itemId: Long? = null,
+        val accessKey: String? = null,
     )
 
     data class LastActivity(

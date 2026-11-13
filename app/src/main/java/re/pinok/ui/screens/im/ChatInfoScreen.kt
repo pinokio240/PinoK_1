@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Apps
@@ -32,6 +34,7 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.MusicNote
@@ -91,6 +94,10 @@ import re.pinok.SovaApp
 import re.pinok.data.model.Chat
 import re.pinok.data.model.Friend
 import re.pinok.util.AppLog
+import re.pinok.ui.screens.profile.PhotoGridRow
+import re.pinok.ui.screens.profile.ProfileTrackRow
+import re.pinok.ui.screens.profile.ProfileVideoCard
+import re.pinok.ui.screens.profile.TabShowMoreRow
 
 /**
  * P3.1: ChatInfoScreen — отдельный экран информации о чате.
@@ -116,6 +123,11 @@ fun ChatInfoScreen(
     peerId: Long,
     onBack: () -> Unit,
     onUserClick: (Long) -> Unit = {},
+    // #CHATINFO-VKWEB (2026-11-13): открытие медиа из вкладок (фото/видео/ссылка).
+    // Раньше элементы SharedMediaGrid/SharedMediaList были не кликабельны.
+    onOpenPhotos: (List<String>, Int) -> Unit = { _, _ -> },
+    onOpenVideo: (Long, Long, String?) -> Unit = { _, _, _ -> },
+    onOpenUrl: (String) -> Unit = {},
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -142,6 +154,11 @@ fun ChatInfoScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     var mediaItems by remember { mutableStateOf<List<re.pinok.api.VKApiClient.HistoryAttachment>>(emptyList()) }
     var loadingMedia by remember { mutableStateOf(false) }
+    // #CHATINFO-VKWEB (2026-11-13): пагинация медиа-вкладок (паттерн ProfileScreen —
+    // serverOffset/loadingMore/hasMore + loadMore*Page + TabShowMoreRow).
+    var mediaNextFrom by remember { mutableStateOf("") }
+    var mediaLoadingMore by remember { mutableStateOf(false) }
+    var mediaHasMore by remember { mutableStateOf(false) }
     // Pending action confirmation (block/report/clear/leave).
     var pendingAction by remember { mutableStateOf<PendingAction?>(null) }
     var actionInProgress by remember { mutableStateOf(false) }
@@ -157,6 +174,9 @@ fun ChatInfoScreen(
     var showChangeDescriptionDialog by remember { mutableStateOf(false) }
     // Fix #267 P0-CHAT-4: диалог добавления участников.
     var showAddMemberDialog by remember { mutableStateOf(false) }
+    // #CHATINFO-VKWEB (2026-11-13): поиск по участникам (как в снапшоте VK web —
+    // поле «Поиск среди участников беседы» над списком).
+    var memberSearchQuery by remember { mutableStateOf("") }
     // Fix #267 P1-CHAT-3: диалог передачи прав создателя.
     var showTransferOwnerDialog by remember { mutableStateOf(false) }
 
@@ -179,6 +199,10 @@ fun ChatInfoScreen(
                 )
                 if (result != null) {
                     muted = result.isMuted()
+                    // #CHATINFO-VKWEB (2026-11-13): синхронизируем кэш MessageNotifier
+                    // (паттерн MessagesScreen Fix #285) — пуш и список диалогов сразу
+                    // подхватывают новое mute-состояние.
+                    re.pinok.realtime.MessageNotifier.setMuted(peerId, muted)
                     AppLog.i("ChatInfoScreen",
                         "mute applied: untilSec=$untilSec server-confirmed muted=$muted")
                 } else {
@@ -303,39 +327,114 @@ fun ChatInfoScreen(
         }
     }
 
-    // Fix #267 P1-CHAT-4: загрузка shared media при смене таба (только для tabs 1..6).
+    // #CHATINFO-VKWEB (2026-11-13): ссылка-приглашение (как в снапшоте VK web —
+    // InfoCell с иконкой chain + «Скопировать ссылку»). Для групповых бесед
+    // (peerId >= 2e9) вызываем messages.getInviteLink.
+    var inviteLink by remember { mutableStateOf<String?>(null) }
+    var inviteLinkLoading by remember { mutableStateOf(false) }
+    LaunchedEffect(peerId) {
+        if (!isGroupChat) return@LaunchedEffect
+        inviteLinkLoading = true
+        try {
+            inviteLink = app.apiClient.messagesGetInviteLink(peerId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.w("ChatInfoScreen", "load invite link error: ${e.message}")
+        } finally {
+            inviteLinkLoading = false
+        }
+    }
+
+// Fix #267 P1-CHAT-4: загрузка shared media при смене таба (только для tabs 1..5).
     // Tab 0 (Members) — не делает API-запрос (members уже загружены в LaunchedEffect выше).
+    // Refactor #CHATINFO-VKWEB (2026-11-13): убрана вкладка «Сервисы» (mini_app) —
+    // media_type="mini_app" не существует в VK API (messages.getHistoryAttachments
+    // поддерживает photo|video|audio|doc|link|market|wall|share) → раздел всегда был пуст.
+    var mediaErrorText by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(selectedTab) {
         val mediaType = when (selectedTab) {
             1 -> "photo"
             2 -> "video"
             3 -> "audio"
-            4 -> "mini_app"
-            5 -> "doc"
-            6 -> "link"
+            4 -> "doc"
+            5 -> "link"
             else -> null  // tab 0 (members) — нет запроса
         }
         if (mediaType == null) {
             mediaItems = emptyList()
+            mediaErrorText = null
             return@LaunchedEffect
         }
         loadingMedia = true
+        mediaErrorText = null
+        mediaLoadingMore = false
+        mediaHasMore = false
+        mediaNextFrom = ""
         try {
-            mediaItems = app.apiClient.messagesGetHistoryAttachments(peerId, mediaType, count = 30)
+            val (page, nextFrom) = app.apiClient.messagesGetHistoryAttachments(peerId, mediaType, count = 30)
+            mediaItems = page
+            mediaNextFrom = nextFrom
+            mediaHasMore = nextFrom.isNotBlank()
+            // #CHATINFO-VKWEB: честная диагностика пустоты — показываем код/текст ошибки VK,
+            // если метод вернул пусто по причине ошибки, а не реального отсутствия вложений.
+            if (mediaItems.isEmpty()) {
+                val errCode = app.apiClient.lastApiErrorCode
+                val errMsg = app.apiClient.lastApiError
+                if (errCode != 0 && !errMsg.isNullOrBlank()) {
+                    mediaErrorText = "Ошибка загрузки ($errCode): $errMsg"
+                }
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Fix #270: LeftCompositionCancellationException — это НОРМАЛЬНАЯ отмена
             // корутины при быстром переключении табов (пользователь свайпнул дальше,
             // пока шёл запрос). Не логируем как error — это не баг, а стандартное
-            // поведение Compose LaunchedEffect. Раньше спамило E в лог (видео/аудио).
-            // Важно: НЕ проглатываем CancellationException для structured concurrency —
-            // пробрасываем, чтобы родительский scope знал об отмене.
+            // поведение Compose LaunchedEffect. Важно: НЕ проглатываем CancellationException
+            // для structured concurrency — пробрасываем, чтобы родительский scope знал об отмене.
             mediaItems = emptyList()
             throw e
         } catch (e: Exception) {
             AppLog.e("ChatInfoScreen", "load media ($mediaType) error", e)
             mediaItems = emptyList()
-        } finally {
+            mediaNextFrom = ""
+            mediaHasMore = false
+            mediaErrorText = "Ошибка загрузки: ${e.message}"
+} finally {
             loadingMedia = false
+            mediaLoadingMore = false
+        }
+    }
+
+    // #CHATINFO-VKWEB (2026-11-13): дозагрузка медиа-вкладок (паттерн ProfileScreen.loadMore*Page).
+    fun loadMoreMediaPage() {
+        if (mediaLoadingMore || loadingMedia || !mediaHasMore) return
+        val mediaType = when (selectedTab) {
+            1 -> "photo"
+            2 -> "video"
+            3 -> "audio"
+            4 -> "doc"
+            5 -> "link"
+            else -> null
+        } ?: return
+        val next = mediaNextFrom
+        if (next.isBlank()) return
+        scope.launch {
+            mediaLoadingMore = true
+            try {
+                val (page, nextFrom) = app.apiClient.messagesGetHistoryAttachments(peerId, mediaType, count = 30, startFrom = next)
+                val existing = mediaItems.map { it.messageId to it.type }.toSet()
+                val fresh = page.filter { (it.messageId to it.type) !in existing }
+                mediaItems = mediaItems + fresh
+                mediaNextFrom = nextFrom
+                mediaHasMore = nextFrom.isNotBlank()
+                AppLog.i("ChatInfoScreen", "media loadMore: +${fresh.size} (nextFrom=$nextFrom)")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AppLog.w("ChatInfoScreen", "media loadMore failed: ${e.message}")
+            } finally {
+                mediaLoadingMore = false
+            }
         }
     }
 
@@ -430,6 +529,8 @@ fun ChatInfoScreen(
                                                     )
                                                     if (result != null) {
                                                         muted = result.isMuted()
+                                                        // #CHATINFO-VKWEB: синхронизация MessageNotifier (Fix #285).
+                                                        re.pinok.realtime.MessageNotifier.setMuted(peerId, muted)
                                                         AppLog.i("ChatInfoScreen", "unmute: server-confirmed muted=$muted")
                                                     } else {
                                                         muted = true
@@ -534,7 +635,56 @@ fun ChatInfoScreen(
                     }
                 }
 
-                // ---- Общие медиа / Участники (7 табов) ----
+                // #CHATINFO-VKWEB (2026-11-13): ссылка-приглашение (InfoCell chain + копирование).
+                if (isGroupChat && (inviteLink != null || inviteLinkLoading)) {
+                    item(key = "invite_link") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val link = inviteLink
+                                    if (link != null) {
+                                        val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+                                        cm?.setPrimaryClip(android.content.ClipData.newPlainText("VK invite", link))
+                                        Toast.makeText(context, "Ссылка-приглашение скопирована", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Outlined.Link,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Ссылка-приглашение",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = if (inviteLinkLoading) "Загрузка…" else (inviteLink ?: "Недоступно"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Icon(
+                                Icons.Outlined.ContentCopy,
+                                contentDescription = "Скопировать",
+                                tint = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        HorizontalDivider()
+                    }
+                }
+
+                // ---- Общие медиа / Участники (6 табов) ----
                 item(key = "media_header") { SectionHeader("Общие медиа") }
                 item(key = "media_tabs") {
                     PrimaryTabRow(selectedTabIndex = selectedTab) {
@@ -547,10 +697,8 @@ fun ChatInfoScreen(
                         Tab(selected = selectedTab == 3, onClick = { selectedTab = 3 },
                             text = { Text("Музыка") })
                         Tab(selected = selectedTab == 4, onClick = { selectedTab = 4 },
-                            text = { Text("Сервисы") })
-                        Tab(selected = selectedTab == 5, onClick = { selectedTab = 5 },
                             text = { Text("Файлы") })
-                        Tab(selected = selectedTab == 6, onClick = { selectedTab = 6 },
+                        Tab(selected = selectedTab == 5, onClick = { selectedTab = 5 },
                             text = { Text("Ссылки") })
                     }
                 }
@@ -561,7 +709,7 @@ fun ChatInfoScreen(
                 // Теперь таб 0 (Участники) рендерит каждый MemberRow как отдельный
                 // item(key) главного LazyColumn — ленивый скролл работает корректно.
                 if (selectedTab == 0) {
-                    // Кнопка «Добавить участников» + placeholder'ы — отдельный item.
+                    // Кнопка «Добавить участников» + поиск + placeholder'ы — отдельный item.
                     item(key = "members_header") {
                         MembersTabHeader(
                             isGroupChat = isGroupChat,
@@ -569,10 +717,29 @@ fun ChatInfoScreen(
                             loadingMembers = loadingMembers,
                             canInvite = canInvite,
                             onAddMember = { showAddMemberDialog = true },
+                            searchQuery = memberSearchQuery,
+                            onSearchQueryChange = { memberSearchQuery = it },
                         )
                     }
-                    // Сами участники — каждый как отдельный ленивый item.
-                    items(members, key = { it.memberId }) { m ->
+                    // Сами участники — каждый как отдельный ленивый item (с фильтром по поиску).
+                    val mq = memberSearchQuery.trim()
+                    val filteredMembers = if (mq.isBlank()) members
+                        else members.filter {
+                            it.firstName.contains(mq, ignoreCase = true) ||
+                                it.lastName.contains(mq, ignoreCase = true)
+                        }
+                    if (filteredMembers.isEmpty() && mq.isNotBlank()) {
+                        item(key = "members_no_match") {
+                            Text(
+                                text = "Никого не найдено",
+                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.outline,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+                    items(filteredMembers, key = { it.memberId }) { m ->
                         MemberRow(
                             member = m,
                             onKick = { memberId ->
@@ -590,24 +757,154 @@ fun ChatInfoScreen(
                         )
                     }
                 } else {
-                    // Tabs 1..6 — медиа (оставлены в одном item, т.к. count ≤ 30).
+                    // Tabs 1..5 — медиа. Используем ГОТОВЫЕ паттерны из ProfileScreen
+                    // (PhotoGridRow / ProfileVideoCard / ProfileTrackRow) — не дублируем.
                     item(key = "media_content") {
                         when (selectedTab) {
-                            // Tab 1 (Фото) — grid 3-in-row.
-                            1 -> SharedMediaGrid(items = mediaItems, loading = loadingMedia)
-                            // Tabs 2..6 — список с иконкой + title (video/audio/mini_app/doc/link).
-                            else -> SharedMediaList(
-                                items = mediaItems,
-                                loading = loadingMedia,
-                                mediaType = when (selectedTab) {
-                                    2 -> "video"
-                                    3 -> "audio"
-                                    4 -> "mini_app"
-                                    5 -> "doc"
-                                    6 -> "link"
-                                    else -> "doc"
-                                },
-                            )
+                            // Tab 1 (Фото) — сетка профиля (3 колонки, тап → PhotoViewer).
+                            1 -> {
+                                val photoUrls = mediaItems.mapNotNull { it.url }
+                                if (loadingMedia && photoUrls.isEmpty()) {
+                                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                                    }
+                                } else if (photoUrls.isEmpty()) {
+                                    Text(
+                                        text = mediaErrorText ?: "Нет фотографий",
+                                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (mediaErrorText != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                } else {
+                                    photoUrls.chunked(3).forEachIndexed { idx, rowUrls ->
+                                        PhotoGridRow(
+                                            urls = rowUrls,
+                                            startIndex = idx * 3,
+                                            fullList = photoUrls,
+                                            onPhotoClick = onOpenPhotos,
+                                        )
+                                    }
+                                }
+                                if (mediaHasMore) {
+                                    TabShowMoreRow(loading = mediaLoadingMore, onClick = { loadMoreMediaPage() })
+                                }
+                            }
+                            // Tab 2 (Видео) — карточки профиля (2 колонки, тап → VideoPlayer).
+                            2 -> {
+                                val videos = mediaItems
+                                if (loadingMedia && videos.isEmpty()) {
+                                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                                    }
+                                } else if (videos.isEmpty()) {
+                                    Text(
+                                        text = mediaErrorText ?: "Нет видео",
+                                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (mediaErrorText != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                } else {
+                                    videos.chunked(2).forEach { rowItems ->
+                                        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            rowItems.forEach { item ->
+                                                ProfileVideoCard(
+                                                    video = re.pinok.data.model.Video(
+                                                        id = item.itemId ?: 0L,
+                                                        ownerId = item.ownerId ?: 0L,
+                                                        title = item.title.ifBlank { "Видео" },
+                                                        description = null,
+                                                        duration = 0,
+                                                        date = 0L,
+                                                        views = 0,
+                                                        accessKey = item.accessKey,
+                                                    ),
+                                                    onClick = {
+                                                        if (item.ownerId != null && item.itemId != null) {
+                                                            onOpenVideo(item.ownerId, item.itemId, item.accessKey)
+                                                        } else {
+                                                            item.url?.let { onOpenUrl(it) }
+                                                        }
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                )
+                                            }
+                                            // Заполняем пустую ячейку последнего ряда.
+                                            if (rowItems.size == 1) Spacer(Modifier.weight(1f))
+                                        }
+                                    }
+                                }
+                                if (mediaHasMore) {
+                                    TabShowMoreRow(loading = mediaLoadingMore, onClick = { loadMoreMediaPage() })
+                                }
+                            }
+                            // Tab 3 (Музыка) — строки треков профиля (тап → PlayerConnection).
+                            3 -> {
+                                val tracks = mediaItems.mapIndexedNotNull { idx, item ->
+                                    item.url?.let { url ->
+                                        re.pinok.data.model.Track(
+                                            id = item.itemId ?: 0L,
+                                            ownerId = item.ownerId ?: 0L,
+                                            artist = item.title.substringBefore(" — "),
+                                            title = item.title.substringAfter(" — ", item.title),
+                                            duration = 0,
+                                            url = url,
+                                            accessKey = item.accessKey,
+                                        )
+                                    }
+                                }
+                                if (loadingMedia && tracks.isEmpty()) {
+                                    Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                                    }
+                                } else if (tracks.isEmpty()) {
+                                    Text(
+                                        text = mediaErrorText ?: "Нет музыки",
+                                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (mediaErrorText != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                } else {
+                                    val playerState = re.pinok.media.PlayerConnection.playerState.collectAsState().value
+                                    tracks.forEachIndexed { idx, track ->
+                                        val isCurrent = playerState.currentTrack?.id == track.id &&
+                                            playerState.currentTrack?.ownerId == track.ownerId
+                                        ProfileTrackRow(
+                                            track = track,
+                                            isPlaying = isCurrent && playerState.isPlaying,
+                                            onClick = {
+                                                if (isCurrent) re.pinok.media.PlayerConnection.togglePlayPause()
+                                                else re.pinok.media.PlayerConnection.playTrackList(tracks, idx)
+                                            },
+                                        )
+                                    }
+                                }
+                                if (mediaHasMore) {
+                                    TabShowMoreRow(loading = mediaLoadingMore, onClick = { loadMoreMediaPage() })
+                                }
+                            }
+                            // Tabs 4..5 (Файлы/Ссылки) — простой кликабельный список.
+                            else -> {
+                                SharedMediaList(
+                                    items = mediaItems,
+                                    loading = loadingMedia,
+                                    errorText = mediaErrorText,
+                                    mediaType = when (selectedTab) {
+                                        4 -> "doc"
+                                        5 -> "link"
+                                        else -> "doc"
+                                    },
+                                    onItemClick = { item ->
+                                        val url = item.url
+                                        if (url != null && url.isNotBlank()) onOpenUrl(url)
+                                    },
+                                )
+                                if (mediaHasMore) {
+                                    TabShowMoreRow(loading = mediaLoadingMore, onClick = { loadMoreMediaPage() })
+                                }
+                            }
                         }
                     }
                 }
@@ -993,6 +1290,8 @@ private fun MembersTabHeader(
     loadingMembers: Boolean,
     canInvite: Boolean,
     onAddMember: () -> Unit,
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {},
 ) {
     if (!isGroupChat) {
         Text(
@@ -1005,6 +1304,24 @@ private fun MembersTabHeader(
         return
     }
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        // #CHATINFO-VKWEB (2026-11-13): поиск по участникам (аналог vkuiSearch в снапшоте).
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = onSearchQueryChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            placeholder = { Text("Поиск среди участников") },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.outline) },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { onSearchQueryChange("") }) {
+                        Icon(Icons.Filled.Clear, contentDescription = "Очистить", tint = MaterialTheme.colorScheme.outline)
+                    }
+                }
+            },
+            singleLine = true,
+        )
         // Fix #267 P0-CHAT-4: кнопка добавления участника (ACL-gated: can_invite).
         // Показывается только если у текущего пользователя есть право приглашать.
         if (canInvite) {
@@ -1137,10 +1454,29 @@ private fun MemberRow(
                     member.isAdmin -> "Администратор"
                     else -> "Участник"
                 }
+                // #CHATINFO-VKWEB (2026-11-13): статус участника — как в снапшоте VK web
+                // (описание под именем): «Сообщество» / «Бот» / «online» / «заходил N минут
+                // назад» / «Не в сети». Показываем его ВМЕСТО роли (роль видна по иконке).
+                val subtitle = when {
+                    member.isCommunity -> "Сообщество"
+                    member.isBot -> "Бот"
+                    member.online -> "online"
+                    member.lastSeen > 0 -> {
+                        val diff = (System.currentTimeMillis() / 1000 - member.lastSeen)
+                        when {
+                            diff < 60 -> "заходил недавно"
+                            diff < 3600 -> "заходил ${diff / 60} мин назад"
+                            diff < 86400 -> "заходил ${diff / 3600} ч назад"
+                            diff < 172800 -> "заходил вчера"
+                            else -> "заходил ${diff / 86400} д назад"
+                        }
+                    }
+                    else -> role
+                }
                 Text(
-                    text = role,
+                    text = subtitle,
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    color = if (member.online) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                 )
             }
             IconButton(onClick = { onKick(member.memberId) }) {
@@ -1167,6 +1503,8 @@ private fun SharedMediaList(
     items: List<re.pinok.api.VKApiClient.HistoryAttachment>,
     loading: Boolean,
     mediaType: String,
+    errorText: String? = null,
+    onItemClick: (re.pinok.api.VKApiClient.HistoryAttachment) -> Unit = {},
 ) {
     if (loading && items.isEmpty()) {
         Box(
@@ -1177,10 +1515,10 @@ private fun SharedMediaList(
     }
     if (items.isEmpty()) {
         Text(
-            text = "Нет вложений",
+            text = errorText ?: "Нет вложений",
             modifier = Modifier.fillMaxWidth().padding(24.dp),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.outline,
+            color = if (errorText != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
             textAlign = TextAlign.Center,
         )
         return
@@ -1190,6 +1528,9 @@ private fun SharedMediaList(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    // #CHATINFO-VKWEB: элементы кликабельны (раньше не было никакого
+                    // взаимодействия: редндерились иконка + текст без onClick).
+                    .clickable { onItemClick(item) }
                     .padding(vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1197,7 +1538,6 @@ private fun SharedMediaList(
                     imageVector = when (mediaType) {
                         "video" -> Icons.Outlined.PlayCircle
                         "audio" -> Icons.Outlined.MusicNote
-                        "mini_app" -> Icons.Outlined.Apps
                         "doc" -> Icons.Outlined.Description
                         "link" -> Icons.Outlined.Link
                         else -> Icons.Outlined.Description
@@ -1215,68 +1555,6 @@ private fun SharedMediaList(
                     modifier = Modifier.weight(1f),
                 )
             }
-        }
-    }
-}
-
-/**
- * Сетка общих медиа (для фото — grid 3-in-row). Используется только для tab 1 (Фото).
- * Для других tabs — см. [SharedMediaList].
- */
-@Composable
-private fun SharedMediaGrid(
-    items: List<re.pinok.api.VKApiClient.HistoryAttachment>,
-    loading: Boolean,
-) {
-    if (loading && items.isEmpty()) {
-        Box(
-            modifier = Modifier.fillMaxWidth().padding(24.dp),
-            contentAlignment = Alignment.Center,
-        ) { CircularProgressIndicator(modifier = Modifier.size(20.dp)) }
-        return
-    }
-    if (items.isEmpty()) {
-        Text(
-            text = "Нет медиа",
-            modifier = Modifier.fillMaxWidth().padding(24.dp),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.outline,
-            textAlign = TextAlign.Center,
-        )
-        return
-    }
-    // Grid 3-in-row (chunked — безопасно внутри LazyColumn item).
-    val rows = items.chunked(3)
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
-        rows.forEach { rowItems ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                rowItems.forEach { item ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                    ) {
-                        if (item.url != null) {
-                            AsyncImage(
-                                model = item.url,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop,
-                            )
-                        }
-                    }
-                }
-                // Заполняем пустые ячейки последнего ряда.
-                repeat(3 - rowItems.size) {
-                    Spacer(modifier = Modifier.weight(1f))
-                }
-            }
-            Spacer(modifier = Modifier.height(2.dp))
         }
     }
 }

@@ -33,6 +33,7 @@ import re.pinok.data.model.Attachment
 import re.pinok.data.model.PhotoSizes
 import re.pinok.data.model.Track
 import re.pinok.data.model.Video
+import re.pinok.util.toDurationString
 
 /**
  * #COMMENT-ATTACH-EVERYWHERE (волна 22): ОБЩИЙ компактный рендер вложений комментария.
@@ -171,13 +172,7 @@ internal fun stickerCdnUrl(stickerId: Int, size: Int = 256): String =
     re.pinok.auth.exchange.AuthDomainsConfig.vkBaseUrl() + "/sticker/1-" + stickerId + "-" + size
 
 /** Формат длительности секунды → «m:ss» (аудио/видео/голосовые в комментариях). */
-internal fun formatCommentDuration(totalSec: Int): String {
-    val safe = if (totalSec > 0) totalSec else 0
-    val m = safe / 60
-    val s = safe % 60
-    val ss = if (s < 10) "0" + s else "" + s
-    return "" + m + ":" + ss
-}
+internal fun formatCommentDuration(totalSec: Int): String = totalSec.coerceAtLeast(0).toDurationString()
 
 /** Компактная сетка фото комментария (1 — крупно, 2 — в ряд, 3+ — 3 колонки). */
 @Composable

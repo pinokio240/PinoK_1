@@ -1385,7 +1385,7 @@ fun AudioPlayerScreen(
                         state = playlistsListState,
                         modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
                     ) {
-                        items(playlists) { playlist ->
+                        items(playlists, key = { "${it.ownerId}_${it.id}" }) { playlist ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()

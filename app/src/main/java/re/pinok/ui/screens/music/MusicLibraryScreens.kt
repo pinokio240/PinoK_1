@@ -330,12 +330,16 @@ fun PlaylistDetailScreen(
                         }
                         Spacer(Modifier.height(12.dp))
                         playlist?.description?.takeIf { it.isNotBlank() }?.let { desc ->
-                            Text(
-                                text = linkifyVkText(
+                            // Refactor W0: linkify дорогой (regex) — кэшируем по описанию.
+                            val descText = remember(desc) {
+                                linkifyVkText(
                                     desc,
                                     VK_ACCENT,
                                     onUrlClick = { url -> openUrlExternal(context, url) },
-                                ),
+                                )
+                            }
+                            Text(
+                                text = descText,
                                 color = VK_TEXT_SECONDARY,
                                 fontSize = 13.sp,
                                 maxLines = 2,
@@ -367,16 +371,23 @@ fun PlaylistDetailScreen(
                                     .background(VK_CARD)
                                     .clickable {
                                         scope.launch {
-                                            TrackDownloadManager.enqueuePlaylistDownload(
-                                                playlistTitle = playlist?.title ?: "Плейлист",
-                                                coverUrl = playlist?.coverUrl,
-                                                tracks = tracks,
-                                            )
-                                            android.widget.Toast.makeText(
-                                                app.applicationContext,
-                                                "Скачивание плейлиста: ${tracks.size} треков",
-                                                android.widget.Toast.LENGTH_SHORT,
-                                            ).show()
+                                            try {
+                                                TrackDownloadManager.enqueuePlaylistDownload(
+                                                    playlistTitle = playlist?.title ?: "Плейлист",
+                                                    coverUrl = playlist?.coverUrl,
+                                                    tracks = tracks,
+                                                )
+                                                android.widget.Toast.makeText(
+                                                    app.applicationContext,
+                                                    "Скачивание плейлиста: ${tracks.size} треков",
+                                                    android.widget.Toast.LENGTH_SHORT,
+                                                ).show()
+                                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                                throw e
+                                            } catch (e: Exception) {
+                                                // Refactor W1 (2026-11-13): краша при отмене/сбое сети.
+                                                AppLog.w("MusicLibraryScreens", "enqueuePlaylistDownload: ${e.message}")
+                                            }
                                         }
                                     }
                                     .padding(horizontal = 18.dp, vertical = 9.dp),

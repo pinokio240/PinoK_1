@@ -1899,12 +1899,17 @@ internal fun CommentItem(
 
             // Текст комментария (с парсингом VK inline-ссылок, как у поста).
             if (comment.text.isNotBlank()) {
-                Text(
-                    text = re.pinok.util.linkifyVkText(
+                // Refactor W0: linkify дорогой (regex) — кэшируем по тексту.
+                val commentLinkColor = MaterialTheme.colorScheme.primary
+                val commentText = remember(comment.text, commentLinkColor) {
+                    re.pinok.util.linkifyVkText(
                         text = comment.text,
-                        linkColor = MaterialTheme.colorScheme.primary,
+                        linkColor = commentLinkColor,
                         onUrlClick = { url -> re.pinok.util.openUrlExternal(ctx, url) },
-                    ),
+                    )
+                }
+                Text(
+                    text = commentText,
                     modifier = Modifier.padding(top = 4.dp),
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -2182,12 +2187,17 @@ internal fun ReplyItem(
             if (reply.text.isNotBlank()) {
                 // FIX-LINK-CLICK: linkify для ответов в комментариях (как в CommentItem).
                 val replyCtx = androidx.compose.ui.platform.LocalContext.current
-                Text(
-                    text = re.pinok.util.linkifyVkText(
+                // Refactor W0: linkify дорогой (regex) — кэшируем по тексту.
+                val replyLinkColor = MaterialTheme.colorScheme.primary
+                val replyText = remember(reply.text, replyLinkColor) {
+                    re.pinok.util.linkifyVkText(
                         text = reply.text,
-                        linkColor = MaterialTheme.colorScheme.primary,
+                        linkColor = replyLinkColor,
                         onUrlClick = { url -> re.pinok.util.openUrlExternal(replyCtx, url) },
-                    ),
+                    )
+                }
+                Text(
+                    text = replyText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(top = 2.dp),

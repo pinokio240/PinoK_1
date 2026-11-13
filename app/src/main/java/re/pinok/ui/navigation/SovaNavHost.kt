@@ -3513,6 +3513,25 @@ composable(Screen.CallsHistory.route) {
                         onUserClick = { userId ->
                             nav.navigate(Screen.UserProfile.buildRoute(userId))
                         },
+                        // #CHATINFO-VKWEB (2026-11-13): открытие медиа из профиля беседы.
+                        onOpenPhotos = { urls, index ->
+                            PhotoHolder.open(urls, index)
+                        },
+                        onOpenVideo = { ownerId, videoId, accessKey ->
+                            VideoHolder.open(
+                                re.pinok.data.model.Video(
+                                    id = videoId,
+                                    ownerId = ownerId,
+                                    title = "",
+                                    duration = 0,
+                                    date = 0L,
+                                    accessKey = accessKey,
+                                )
+                            )
+                        },
+                        onOpenUrl = { url ->
+                            nav.navigate(Screen.InternalBrowser.buildRoute(url))
+                        },
                     )
                 }
                 // P3.3: FoldersSettingsScreen — управление папками диалогов.

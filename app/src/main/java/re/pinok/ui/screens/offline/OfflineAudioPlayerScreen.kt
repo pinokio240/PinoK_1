@@ -63,6 +63,7 @@ import re.pinok.media.PlayerConnection
 import re.pinok.media.TrackDownloadManager
 import re.pinok.util.AppLog
 import re.pinok.util.toDurationString
+import re.pinok.util.toFileSizeString
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -533,21 +534,7 @@ private fun OfflineTrackRow(
 
 
 /** Форматирует байты → "1.2 МБ" / "512 КБ" / "0 Б". */
-private fun formatBytes(bytes: Long): String {
-    if (bytes <= 0) return "0 Б"
-    val units = arrayOf("Б", "КБ", "МБ", "ГБ")
-    var value = bytes.toDouble()
-    var unitIndex = 0
-    while (value >= 1024 && unitIndex < units.lastIndex) {
-        value /= 1024
-        unitIndex++
-    }
-    return if (unitIndex == 0) {
-        "$bytes ${units[0]}"
-    } else {
-        String.format("%.1f %s", value, units[unitIndex])
-    }
-}
+private fun formatBytes(bytes: Long): String = bytes.toFileSizeString()
 
 /**
  * Возвращает строку метаданных о файле трека: "1.2 МБ • TS • 2025-01-15"

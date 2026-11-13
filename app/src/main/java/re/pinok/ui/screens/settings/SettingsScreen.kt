@@ -6018,7 +6018,7 @@ private fun UpdateTab(
                 )
             }
         } else {
-            items(versions) { info ->
+            items(versions, key = { it.versionCode }) { info ->
                 val currentCode: Long = BuildConfig.VERSION_CODE.toLong()
                 // Состояние загрузки конкретно этой версии (глобальный стейт —
                 // одна активная загрузка, UI подсвечивает только её строку).

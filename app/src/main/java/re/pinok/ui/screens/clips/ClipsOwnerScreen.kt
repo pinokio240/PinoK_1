@@ -155,7 +155,7 @@ fun ClipsOwnerScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(vertical = 8.dp),
                     ) {
-                        items(clips) { clip ->
+                        items(clips, key = { "${it.ownerId}_${it.id}" }) { clip ->
                             ClipsOwnerCard(
                                 video = clip,
                                 onClick = { onVideoClick(clip) },

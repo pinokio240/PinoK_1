@@ -95,6 +95,8 @@ import re.pinok.media.TrackDownloadManager
 import re.pinok.media.VideoDownloadManager
 import re.pinok.media.StoryVideoDownloadManager
 import re.pinok.util.AppLog
+import re.pinok.util.toDurationString
+import re.pinok.util.toFileSizeString
 import java.io.File
 
 private const val TAG = "OfflineManagerScreen"
@@ -1440,21 +1442,7 @@ private fun VideoOfflineRow(
     }
 }
 
-private fun formatBytes(bytes: Long): String {
-    if (bytes <= 0) return "0 Б"
-    val units = arrayOf("Б", "КБ", "МБ", "ГБ")
-    var value = bytes.toDouble()
-    var unitIndex = 0
-    while (value >= 1024 && unitIndex < units.lastIndex) {
-        value /= 1024
-        unitIndex++
-    }
-    return if (unitIndex == 0) {
-        "${bytes} ${units[0]}"
-    } else {
-        String.format("%.1f %s", value, units[unitIndex])
-    }
-}
+private fun formatBytes(bytes: Long): String = bytes.toFileSizeString()
 
 // ═══════════════════════════════════════════════════════════════════
 // Fix #100: Story video offline tab — кэш видео-историй.
@@ -2099,12 +2087,7 @@ private fun ClipOfflineRow(
  * §37.12 #330: Форматирование длительности clip'а в M:SS (например 1:02 для 62s).
  * Mirror StoryOfflinePlayerScreen.formatMs, но принимает секунды (Int), а не миллисекунды.
  */
-private fun formatClipDuration(seconds: Int): String {
-    val s = seconds.coerceAtLeast(0)
-    val m = s / 60
-    val sec = s % 60
-    return "%d:%02d".format(m, sec)
-}
+private fun formatClipDuration(seconds: Int): String = seconds.coerceAtLeast(0).toDurationString()
 
 /**
  * §37.12 #330: human-readable «N д/ч/мин назад» для даты скачивания clip'а.

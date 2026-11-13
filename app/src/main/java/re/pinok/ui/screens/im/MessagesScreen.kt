@@ -2213,6 +2213,14 @@ private fun ChatCard(
         }
         prefix + body
     }
+    // Refactor W0 (2026-11-13): linkify дорогой (regex) — кэшируем по тексту превью.
+    val previewLinkified = remember(preview, previewLinkColor) {
+        linkifyVkText(
+            preview,
+            previewLinkColor,
+            onUrlClick = { url -> openUrlExternal(previewContext, url) },
+        )
+    }
     // Fix #282: read checkmarks для исходящего последнего сообщения.
     // outRead = ID последнего ИСХОДЯЩЕГО сообщения, прочитанного собеседником.
     // lastMessage.id <= outRead → прочитано (✓✓ primary), иначе отправлено (✓ outline).
@@ -2458,11 +2466,7 @@ private fun ChatCard(
                         // Не ломает подстановку превью: typingText == null → прежний
                         // preview (текст/метка вложения/action-текст/«Вы: » префикс).
                         Text(
-                            text = if (typingText != null) AnnotatedString(typingText) else linkifyVkText(
-                                preview,
-                                previewLinkColor,
-                                onUrlClick = { url -> openUrlExternal(previewContext, url) },
-                            ),
+                            text = if (typingText != null) AnnotatedString(typingText) else previewLinkified,
                             style = MaterialTheme.typography.bodySmall,
                             color = if (typingText != null)
                                 MaterialTheme.colorScheme.primary

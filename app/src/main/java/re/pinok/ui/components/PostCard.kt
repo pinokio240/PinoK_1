@@ -452,11 +452,14 @@ fun PostCard(
                 var expanded by remember { mutableStateOf(false) }
                 var textOverflowed by remember { mutableStateOf(false) }
                 val linkColor = MaterialTheme.colorScheme.primary
-                val fullText = linkifyVkText(
-                    text = post.text,
-                    linkColor = linkColor,
-                    onUrlClick = { url -> openUrlExternal(ctx, url) },
-                )
+                // Refactor W0 (2026-11-13): linkify дорогой (regex) — кэшируем по тексту.
+                val fullText = remember(post.text, linkColor) {
+                    linkifyVkText(
+                        text = post.text,
+                        linkColor = linkColor,
+                        onUrlClick = { url -> openUrlExternal(ctx, url) },
+                    )
+                }
                 // textMaxLines: Int.MAX_VALUE = преф выключен → лимита нет (весь текст,
                 // overflow=false → кнопки нет). Иначе (10) → обрезка + кнопка «Показать ещё».
                 val limit = if (textMaxLines == Int.MAX_VALUE) Int.MAX_VALUE else textMaxLines

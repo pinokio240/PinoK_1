@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Track
+import re.pinok.util.toDurationString
 
 // P0.32: VK accent color для музыкального раздела.
 private val VkAccent = Color(0xFF0077FF)
@@ -360,8 +361,4 @@ private fun FrequencyBars(
 }
 
 // P0.32: форматирование длительности — секунды → "M:SS".
-private fun formatDuration(seconds: Int): String {
-    val m = seconds / 60
-    val s = seconds % 60
-    return "%d:%02d".format(m, s)
-}
+private fun formatDuration(seconds: Int): String = seconds.toDurationString()

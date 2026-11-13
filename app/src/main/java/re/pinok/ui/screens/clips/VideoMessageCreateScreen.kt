@@ -85,6 +85,7 @@ import kotlinx.coroutines.withContext
 import re.pinok.SovaApp
 import re.pinok.ui.components.VideoMessageShapes
 import re.pinok.util.AppLog
+import re.pinok.util.toRecordingTimeString
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -664,9 +665,4 @@ private fun SendingStage(
     }
 }
 
-private fun formatSec(sec: Int): String {
-    val m = sec / 60
-    val s = sec % 60
-    return if (m > 0) String.format(Locale.getDefault(), "%d:%02d", m, s)
-    else String.format(Locale.getDefault(), "0:%02d", s)
-}
+private fun formatSec(sec: Int): String = sec.toRecordingTimeString()

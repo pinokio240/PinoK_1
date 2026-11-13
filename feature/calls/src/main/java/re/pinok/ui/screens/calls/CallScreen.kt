@@ -88,6 +88,7 @@ import re.pinok.data.model.VkCall
 import re.pinok.media.WebRtcEngine
 import re.pinok.media.VideoTextureRenderer
 import re.pinok.util.AppLog
+import re.pinok.util.toDurationString
 import org.webrtc.SessionDescription
 import re.pinok.feature.calls.CallsDependencies
 
@@ -2756,11 +2757,7 @@ private fun CallControlButton(
     }
 }
 
-private fun formatDuration(seconds: Long): String {
-    val m = seconds / 60
-    val s = seconds % 60
-    return "${m}:${s.toString().padStart(2, '0')}"
-}
+private fun formatDuration(seconds: Long): String = seconds.toInt().toDurationString()
 
 /**
  * #CALLS-ANSWER-CYCLE (2026-09-02, лог ciber.txt 12:45–12:49): o=-строка SDP

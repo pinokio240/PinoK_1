@@ -1560,12 +1560,15 @@ private fun NotificationCard(
 
             // VK-WEB-CARD: текст уведомления (глагол без имени, как в VK web).
             if (displayText.isNotBlank()) {
-                Text(
-                    text = linkifyVkText(
+                val displayLinkified = remember(displayText, linkColor) {
+                    linkifyVkText(
                         displayText,
                         linkColor,
                         onUrlClick = { url -> openUrlExternal(context, url) },
-                    ),
+                    )
+                }
+                Text(
+                    text = displayLinkified,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 3,
@@ -1614,11 +1617,13 @@ private fun NotificationCard(
                 // кликабельный блок → переход НА САМ ПОСТ (без скролла к комментарию,
                 // commentId=0L). Раньше работал только неявно через клик по всей карточке.
                 Text(
-                    text = linkifyVkText(
-                        item.parentText,
-                        linkColor,
-                        onUrlClick = { url -> openUrlExternal(context, url) },
-                    ),
+                    text = remember(item.parentText, linkColor) {
+                        linkifyVkText(
+                            item.parentText,
+                            linkColor,
+                            onUrlClick = { url -> openUrlExternal(context, url) },
+                        )
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 3,
@@ -1719,11 +1724,13 @@ private fun NotificationCard(
                             )
                         }
                         Text(
-                            text = linkifyVkText(
-                                item.replyText,
-                                linkColor,
-                                onUrlClick = { url -> openUrlExternal(context, url) },
-                            ),
+                            text = remember(item.replyText, linkColor) {
+                                linkifyVkText(
+                                    item.replyText,
+                                    linkColor,
+                                    onUrlClick = { url -> openUrlExternal(context, url) },
+                                )
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 2,
@@ -1747,11 +1754,13 @@ private fun NotificationCard(
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                 ) {
                     Text(
-                        text = linkifyVkText(
-                            item.bubbleText,
-                            linkColor,
-                            onUrlClick = { url -> openUrlExternal(context, url) },
-                        ),
+                        text = remember(item.bubbleText, linkColor) {
+                            linkifyVkText(
+                                item.bubbleText,
+                                linkColor,
+                                onUrlClick = { url -> openUrlExternal(context, url) },
+                            )
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 3,

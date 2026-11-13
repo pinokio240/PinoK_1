@@ -1680,7 +1680,7 @@ private fun MyMusicMenuList(
                             .fillMaxWidth()
                             .heightIn(max = 400.dp),
                     ) {
-                        items(playlists) { playlist ->
+                        items(playlists, key = { "${it.ownerId}_${it.id}" }) { playlist ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -3490,12 +3490,16 @@ private fun SearchPlaylistCard(
             else -> ""
         }
         if (subtitle.isNotBlank()) {
-            Text(
-                text = if (!playlistDescription.isNullOrBlank()) linkifyVkText(
+            // Refactor W0: linkify дорогой (regex) — кэшируем по подзаголовку.
+            val subtitleText = remember(playlistDescription, subtitle, secondaryColor) {
+                if (!playlistDescription.isNullOrBlank()) linkifyVkText(
                     subtitle,
                     secondaryColor,
                     onUrlClick = { url -> openUrlExternal(context, url) },
-                ) else AnnotatedString(subtitle),
+                ) else AnnotatedString(subtitle)
+            }
+            Text(
+                text = subtitleText,
                 color = secondaryColor,
                 fontSize = 10.sp,
                 maxLines = 1,

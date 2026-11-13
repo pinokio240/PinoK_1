@@ -2744,15 +2744,20 @@ fun ProfileHeader(
         val statusClick = onStatusClick
         if (statusText != null) {
             Spacer(Modifier.height(4.dp))
-            Text(
+            // Refactor W0: linkify дорогой (regex) — кэшируем по тексту статуса.
+            val statusLinkColor = MaterialTheme.colorScheme.primary
+            val profileStatusText = remember(statusText, statusClick, statusLinkColor) {
                 // #STATUS-LINKIFY (2026-11-01): статус ЧУЖОГО профиля кликабелен
                 // (VK-ссылки → внутренние экраны); свой статус (onStatusClick != null)
                 // оставляем как есть — тап редактирует статус, а не открывает ссылку.
-                text = if (statusClick == null) linkifyVkText(
+                if (statusClick == null) linkifyVkText(
                     statusText,
-                    MaterialTheme.colorScheme.primary,
+                    statusLinkColor,
                     onUrlClick = { url -> openUrlExternal(profileContext, url) },
-                ) else AnnotatedString(statusText),
+                ) else AnnotatedString(statusText)
+            }
+            Text(
+                text = profileStatusText,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 3,

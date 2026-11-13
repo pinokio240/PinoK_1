@@ -2101,15 +2101,24 @@ fun VideoPlayerScreen(
         videoLiked = newLiked
         videoLikeCount = (videoLikeCount + (if (newLiked) 1 else -1)).coerceAtLeast(0)
         scope.launch {
-            val newCount = if (newLiked) {
-                app.apiClient.likesAdd("video", v.ownerId, v.id, accessKey = v.accessKey)
-            } else {
-                app.apiClient.likesDelete("video", v.ownerId, v.id, accessKey = v.accessKey)
-            }
-            if (newCount >= 0) {
-                videoLikeCount = newCount
-            } else {
-                // Ошибка API — откат оптимистичного состояния (честное UI).
+            try {
+                val newCount = if (newLiked) {
+                    app.apiClient.likesAdd("video", v.ownerId, v.id, accessKey = v.accessKey)
+                } else {
+                    app.apiClient.likesDelete("video", v.ownerId, v.id, accessKey = v.accessKey)
+                }
+                if (newCount >= 0) {
+                    videoLikeCount = newCount
+                } else {
+                    // Ошибка API — откат оптимистичного состояния (честное UI).
+                    videoLiked = !newLiked
+                    videoLikeCount = (videoLikeCount + (if (newLiked) -1 else 1)).coerceAtLeast(0)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Refactor W1 (2026-11-13): сеть не должна ронять плеер — откат и тост.
+                AppLog.w(TAG, "toggleLike неудался: ${e.message}")
                 videoLiked = !newLiked
                 videoLikeCount = (videoLikeCount + (if (newLiked) -1 else 1)).coerceAtLeast(0)
             }
@@ -2134,12 +2143,20 @@ fun VideoPlayerScreen(
         if (addedToMine) return // уже у себя; снятие — через меню «Ещё»
         addedToMine = true
         scope.launch {
-            val ok = app.apiClient.videoAdd(v.id, v.ownerId, v.accessKey)
-            if (ok) {
-                toast("Добавлено к себе")
-            } else {
+            try {
+                val ok = app.apiClient.videoAdd(v.id, v.ownerId, v.accessKey)
+                if (ok) {
+                    toast("Добавлено к себе")
+                } else {
+                    addedToMine = false
+                    toast("Не удалось добавить")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Refactor W1: сеть не должна ронять плеер.
+                AppLog.w(TAG, "addToMine неудался: ${e.message}")
                 addedToMine = false
-                toast("Не удалось добавить")
             }
         }
     }
@@ -2158,6 +2175,8 @@ fun VideoPlayerScreen(
         scope.launch {
             val mine = try {
                 app.apiClient.videoGet(count = 200)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLog.w(TAG, "videoGet(mine) для поиска копии упал: ${e.message}")
                 null
@@ -2197,7 +2216,16 @@ fun VideoPlayerScreen(
                 toast("Копия у себя не найдена")
                 return@launch
             }
-            val ok = app.apiClient.videoDelete(target.id, target.ownerId)
+            var ok: Boolean
+            try {
+                ok = app.apiClient.videoDelete(target.id, target.ownerId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Refactor W1: сеть не должна ронять плеер.
+                AppLog.w(TAG, "videoDelete неудался: ${e.message}")
+                ok = false
+            }
             if (ok) {
                 addedToMine = false
                 toast("Удалено у себя")
@@ -2217,23 +2245,31 @@ fun VideoPlayerScreen(
         val newFav = !inBookmarks
         inBookmarks = newFav
         scope.launch {
-            val v = resolvedVideo
-            // #BOOKMARKS-CLIPS: клипы кладём в закладки как "clip" (fave.addClip /
-            // fave.removeClip), иначе из fave.get они придут с type="video" и
-            // попадут в раздел «Видео», а не «Клипы». Обычные видео — "video".
-            val bmType = if (v.isClip) "clip" else "video"
-            val ok = if (newFav) {
-                // #BOOKMARKS-FIX: access_key для чужих видео (лента/поиск) —
-                // без него VK отвечает ошибкой доступа, «закладки не работают».
-                app.apiClient.faveAdd(bmType, v.ownerId, v.id, v.accessKey)
-            } else {
-                app.apiClient.faveRemove(bmType, v.ownerId, v.id, v.accessKey)
-            }
-            if (ok) {
-                if (newFav) toast("Добавлено в закладки") else toast("Удалено из закладок")
-            } else {
+            try {
+                val v = resolvedVideo
+                // #BOOKMARKS-CLIPS: клипы кладём в закладки как "clip" (fave.addClip /
+                // fave.removeClip), иначе из fave.get они придут с type="video" и
+                // попадут в раздел «Видео», а не «Клипы». Обычные видео — "video".
+                val bmType = if (v.isClip) "clip" else "video"
+                val ok = if (newFav) {
+                    // #BOOKMARKS-FIX: access_key для чужих видео (лента/поиск) —
+                    // без него VK отвечает ошибкой доступа, «закладки не работают».
+                    app.apiClient.faveAdd(bmType, v.ownerId, v.id, v.accessKey)
+                } else {
+                    app.apiClient.faveRemove(bmType, v.ownerId, v.id, v.accessKey)
+                }
+                if (ok) {
+                    if (newFav) toast("Добавлено в закладки") else toast("Удалено из закладок")
+                } else {
+                    inBookmarks = !newFav
+                    toast("Не удалось обновить закладки")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Refactor W1: сеть не должна ронять плеер.
+                AppLog.w(TAG, "toggleVideoBookmark неудался: ${e.message}")
                 inBookmarks = !newFav
-                toast("Не удалось обновить закладки")
             }
         }
     }
@@ -2283,8 +2319,15 @@ fun VideoPlayerScreen(
         val v = resolvedVideo
         if (v.id <= 0L || v.ownerId == 0L) return
         scope.launch {
-            val ok = app.apiClient.videoReport(v.id, v.ownerId)
-            if (ok) toast("Жалоба отправлена") else toast("Не удалось отправить")
+            try {
+                val ok = app.apiClient.videoReport(v.id, v.ownerId)
+                if (ok) toast("Жалоба отправлена") else toast("Не удалось отправить")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Refactor W1: сеть не должна ронять плеер.
+                AppLog.w(TAG, "videoReport неудался: ${e.message}")
+            }
         }
     }
 
@@ -3253,12 +3296,16 @@ fun VideoPlayerScreen(
                     var descExpanded by rememberSaveable(resolvedVideo.id) { mutableStateOf(false) }
                     var descOverflowed by rememberSaveable(resolvedVideo.id) { mutableStateOf(false) }
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = linkifyVkText(
+                    // Refactor W0: linkify дорогой (regex) — кэшируем по описанию.
+                    val descText = remember(desc) {
+                        linkifyVkText(
                             desc,
                             Color(0xFF1976D2),
                             onUrlClick = { url -> openUrlExternal(context, url) },
-                        ),
+                        )
+                    }
+                    Text(
+                        text = descText,
                         style = MaterialTheme.typography.bodyMedium,
                         color = VK_WHITE.copy(alpha = 0.9f),
                         fontSize = 14.sp,
@@ -4369,6 +4416,7 @@ private fun VideoShareSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var chats by remember { mutableStateOf<List<re.pinok.data.model.Chat>>(emptyList()) }
+    var groups by remember { mutableStateOf<List<re.pinok.data.model.Group>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
 
     // video-attachment для messages.send / wall.post — с access_key для
@@ -4392,6 +4440,23 @@ private fun VideoShareSheet(
         loading = true
         try {
             chats = app.apiClient.messagesGetConversations(count = 20)
+            // #SHARE-18B (паттерн ShareSheet.kt): сообщества, где могу публиковать.
+            val managed = try {
+                app.apiClient.groupsGet(count = 100, filter = "admin,editor,moder")
+            } catch (e: Exception) {
+                AppLog.e(TAG, "VideoShareSheet loadGroups(managed) error", e)
+                emptyList()
+            }
+            val memberGroups = try {
+                app.apiClient.groupsGet(userId = null, count = 100)
+            } catch (e: Exception) {
+                AppLog.e(TAG, "VideoShareSheet loadGroups(member) error", e)
+                emptyList()
+            }
+            val merged = LinkedHashMap<Long, re.pinok.data.model.Group>()
+            for (g in managed) merged[g.id] = g
+            for (g in memberGroups) merged.putIfAbsent(g.id, g)
+            groups = merged.values.filter { it.canPost == 1 }
         } catch (e: Exception) {
             AppLog.e(TAG, "messagesGetConversations error", e)
         } finally {
@@ -4563,6 +4628,94 @@ private fun VideoShareSheet(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
+                        }
+                    }
+                }
+            }
+            // #SHARE-COMMUNITY (2026-11-13): «Отправить в сообщество» — паттерн ShareSheet.kt.
+            if (groups.isNotEmpty()) {
+                HorizontalDivider()
+                Text(
+                    text = "Отправить в сообщество",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 240.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    items(groups, key = { it.id }) { group ->
+                        val gTitle = group.name
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 52.dp)
+                                .clickable {
+                                    scope.launch {
+                                        try {
+                                            val newPostId = app.apiClient.wallPostWithAttachments(
+                                                message = "",
+                                                attachments = videoAttachment,
+                                                ownerId = -group.id,
+                                            )
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                if (newPostId > 0) "Опубликовано в сообщество «$gTitle»" else "Не удалось опубликовать",
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        } catch (e: Exception) {
+                                            AppLog.e(TAG, "wallPostWithAttachments(group) error", e)
+                                            android.widget.Toast.makeText(
+                                                context, "Ошибка: ${e.message}", android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                        onDismiss()
+                                    }
+                                }
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                val photoUrl = group.photo200
+                                if (photoUrl != null) {
+                                    AsyncImage(
+                                        model = photoUrl,
+                                        contentDescription = null,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop,
+                                    )
+                                } else {
+                                    Text(
+                                        text = gTitle.take(1).uppercase(),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = gTitle,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "Сообщество",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 }

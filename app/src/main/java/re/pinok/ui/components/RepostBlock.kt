@@ -176,12 +176,16 @@ fun RepostBlock(
                 // пост целиком (onPostClick).
                 var repostTextExpanded by remember { mutableStateOf(false) }
                 var repostTextOverflowed by remember { mutableStateOf(false) }
-                Text(
-                    text = linkifyVkText(
+                val repostLinkColor = MaterialTheme.colorScheme.primary
+                val repostLinkified = remember(repost.text, repostLinkColor) {
+                    linkifyVkText(
                         text = repost.text,
-                        linkColor = MaterialTheme.colorScheme.primary,
+                        linkColor = repostLinkColor,
                         onUrlClick = { url -> openUrlExternal(ctx, url) },
-                    ),
+                    )
+                }
+                Text(
+                    text = repostLinkified,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.fillMaxWidth().clickable {
                         if (repostTextOverflowed && !repostTextExpanded) {

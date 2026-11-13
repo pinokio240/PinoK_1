@@ -73,7 +73,7 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
 import re.pinok.SovaApp
 import re.pinok.util.AppLog
-import java.util.Locale
+import re.pinok.util.toRecordingTimeString
 
 private const val TAG = "ClipCreateScreen"
 
@@ -645,12 +645,7 @@ private fun DoneStage(
 // Helpers
 // ════════════════════════════════════════════════════════════════════════
 
-private fun formatSeconds(sec: Int): String {
-    val m = sec / 60
-    val s = sec % 60
-    return if (m > 0) String.format(Locale.getDefault(), "%d:%02d", m, s)
-    else String.format(Locale.getDefault(), "0:%02d", s)
-}
+private fun formatSeconds(sec: Int): String = sec.toRecordingTimeString()
 
 private fun clipCreateViewModelFactory(app: SovaApp) = viewModelFactory {
     initializer { ClipCreateViewModel(app) }

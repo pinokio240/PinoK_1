@@ -1480,12 +1480,17 @@ fun CommunityScreen(
             val descContext = LocalContext.current
             // Status text
             if (!g.status.isNullOrBlank()) {
-                Text(
-                    text = linkifyVkText(
+                // Refactor W0: linkify дорогой (regex) — кэшируем по статусу.
+                val groupStatusColor = MaterialTheme.colorScheme.primary
+                val groupStatusText = remember(g.status, groupStatusColor) {
+                    linkifyVkText(
                         g.status,
-                        MaterialTheme.colorScheme.primary,
+                        groupStatusColor,
                         onUrlClick = { url -> openUrlExternal(descContext, url) },
-                    ),
+                    )
+                }
+                Text(
+                    text = groupStatusText,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
@@ -1503,11 +1508,14 @@ fun CommunityScreen(
                 // #DESC-LINKIFY (2026-11-01): VK-ссылки в описании кликабельны
                 // (LinkAnnotation перехватывает тап по ссылке; тап по остальному
                 // тексту по-прежнему разворачивает описание).
-                val linkifiedDesc = linkifyVkText(
-                    g.description,
-                    linkColor,
-                    onUrlClick = { url -> openUrlExternal(descContext, url) },
-                )
+                // Refactor W0: linkify дорогой (regex) — кэшируем по описанию.
+                val linkifiedDesc = remember(g.description, descExpanded, linkColor) {
+                    linkifyVkText(
+                        g.description,
+                        linkColor,
+                        onUrlClick = { url -> openUrlExternal(descContext, url) },
+                    )
+                }
                 Text(
                     text = buildAnnotatedString {
                         append(linkifiedDesc)
