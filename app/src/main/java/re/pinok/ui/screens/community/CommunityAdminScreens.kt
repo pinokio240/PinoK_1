@@ -1303,13 +1303,10 @@ fun AdminPeopleScreen(
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    AsyncImage(
-                                        model = mgr.photo100,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .clip(CircleShape),
+                                    re.pinok.ui.components.UserAvatar(
+                                        url = mgr.photo100,
+                                        fallbackText = mgr.name,
+                                        size = 44.dp,
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
@@ -1370,13 +1367,10 @@ fun AdminPeopleScreen(
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    AsyncImage(
-                                        model = user.photo100,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .clip(CircleShape),
+                                    re.pinok.ui.components.UserAvatar(
+                                        url = user.photo100,
+                                        fallbackText = user.fullName,
+                                        size = 44.dp,
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
@@ -1477,13 +1471,10 @@ fun AdminPeopleScreen(
                                             .padding(vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        AsyncImage(
-                                            model = found.photo100,
-                                            contentDescription = null,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier
-                                                .size(36.dp)
-                                                .clip(CircleShape),
+                                        re.pinok.ui.components.UserAvatar(
+                                            url = found.photo100,
+                                            fallbackText = found.fullName,
+                                            size = 36.dp,
                                         )
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Text(
@@ -1526,13 +1517,10 @@ fun AdminPeopleScreen(
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    AsyncImage(
-                                        model = entry.photo100,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .clip(CircleShape),
+                                    re.pinok.ui.components.UserAvatar(
+                                        url = entry.photo100,
+                                        fallbackText = entry.name,
+                                        size = 44.dp,
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
@@ -2070,13 +2058,10 @@ fun AdminInvitesScreen(
                                                 .padding(horizontal = 16.dp, vertical = 10.dp),
                                             verticalAlignment = Alignment.CenterVertically,
                                         ) {
-                                            AsyncImage(
-                                                model = friend.photo100,
-                                                contentDescription = null,
-                                                contentScale = ContentScale.Crop,
-                                                modifier = Modifier
-                                                    .size(44.dp)
-                                                    .clip(CircleShape),
+                                            re.pinok.ui.components.UserAvatar(
+                                                url = friend.photo100,
+                                                fallbackText = friend.fullName,
+                                                size = 44.dp,
                                             )
                                             Spacer(modifier = Modifier.width(12.dp))
                                             Column(modifier = Modifier.weight(1f)) {
@@ -2143,13 +2128,10 @@ fun AdminInvitesScreen(
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    AsyncImage(
-                                        model = user.photo100,
-                                        contentDescription = null,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .clip(CircleShape),
+                                    re.pinok.ui.components.UserAvatar(
+                                        url = user.photo100,
+                                        fallbackText = user.fullName,
+                                        size = 44.dp,
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {

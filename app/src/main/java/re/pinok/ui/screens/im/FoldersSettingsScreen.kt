@@ -452,13 +452,10 @@ private fun FolderEditDialog(
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 // Аватар.
-                                AsyncImage(
-                                    model = chat.peer.photo,
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape),
-                                    contentScale = ContentScale.Crop,
+                                re.pinok.ui.components.UserAvatar(
+                                    url = chat.peer.photo,
+                                    fallbackText = chat.peer.title ?: "?",
+                                    size = 32.dp,
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text(

@@ -252,11 +252,10 @@ fun AdminChatsScreen(
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        AsyncImage(
-                            model = chat.peer.photo,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.size(46.dp).clip(CircleShape),
+                        re.pinok.ui.components.UserAvatar(
+                            url = chat.peer.photo,
+                            fallbackText = chat.peer.title ?: "?",
+                            size = 46.dp,
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {

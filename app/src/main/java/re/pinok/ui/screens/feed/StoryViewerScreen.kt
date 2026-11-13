@@ -928,30 +928,11 @@ fun StoryViewerScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val avatarUrl = currentGroup.photo100
-            if (avatarUrl != null) {
-                AsyncImage(
-                    model = avatarUrl,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(Color.Gray),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = (currentGroup.name ?: "?").take(1).uppercase(),
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
+            re.pinok.ui.components.UserAvatar(
+                url = avatarUrl,
+                fallbackText = currentGroup.name ?: "?",
+                size = 36.dp,
+            )
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
