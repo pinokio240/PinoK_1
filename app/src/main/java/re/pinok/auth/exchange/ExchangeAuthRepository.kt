@@ -1018,6 +1018,36 @@ class ExchangeAuthRepository(
                     null
                 }
             } else {
+                // #AUTH-RETRY-AFTER-WEBVIEW (2026-11-14): WebView-механизм крутился
+                // 25–60 сек (LS_POLL_TIMEOUT_MS), сеть за это время могла
+                // восстановиться (логи 14.11: Path 1.5 падал с ConnectException,
+                // WEB-MECHANISM FAILED, а повторный HTTP сразу давал OK).
+                // Повторяем Path 1.5 ОДИН раз — если сеть вернулась, получаем
+                // токен за ~0.5–1с вместо «re-login required».
+                val retry = if (HiddenSessionRefresher.wasHttpPathStillEligible) {
+                    silentRefreshViaRemixsidLive()
+                } else null
+                if (retry != null) {
+                    val state = saveWebTokenResult(
+                        accessToken = retry.accessToken,
+                        userId = retry.userId,
+                        expiresAt = retry.expiresAt,
+                        satToken = null,
+                        logoutHash = retry.logoutHash,
+                        remixsid = null,
+                    )
+                    if (state is AuthState.Success) {
+                        lastRefreshSuccessMs = System.currentTimeMillis()
+                        AppLog.i(TAG, "ensureFreshToken: WEB-MECHANISM FAILED, но сеть " +
+                            "восстановилась — повторный Path 1.5 OK (user_id=${retry.userId}) " +
+                            "(#AUTH-RETRY-AFTER-WEBVIEW)")
+                        return@withLock retry.accessToken
+                    }
+                    AppLog.w(TAG, "ensureFreshToken: повторный Path 1.5 token rejected on save — $state")
+                } else {
+                    AppLog.d(TAG, "ensureFreshToken: повторный Path 1.5 пропущен " +
+                        "(remixsid/сеть уже не подходят по WEB-MECHANISM)")
+                }
                 AppLog.w(TAG, "ensureFreshToken: Path 1.5 + WEB-MECHANISM оба failed " +
                     "(definitivelyDead=${HiddenSessionRefresher.lastAttemptDefinitivelyDead}) — re-login required")
                 null

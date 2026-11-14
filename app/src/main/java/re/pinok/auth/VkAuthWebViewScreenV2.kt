@@ -242,6 +242,73 @@ fun VkAuthWebViewScreenV2(
             AppLog.i(TAG, "remixsid polling запущен (адаптивный: ${fastIntervalMs}мс → ${slowIntervalMs}мс после ${fastPhaseMs/1000}с)")
 
             while (isActive) {
+                // #AUTH-V2-POLL (2026-11-14): дополнительный путь завершения входа —
+                // web_token из localStorage m.vk.ru/id.vk.ru, как в способе 2
+                // (VkLiteWebViewAuthScreen). После прохождения VK ID (включая 2FA)
+                // VK кладёт web_token в localStorage/*:web_token:login:auth.
+                // Способ 1 ждал только remixsid/silent_token и застревал на br=ch;
+                // теперь вход завершится, как только в localStorage появится токен.
+                try {
+                    val wvNow = webViewRef
+                    if (wvNow != null) {
+                        val u = wvNow.url
+                        if (u != null && u.startsWith("https://")) {
+                            val host = runCatching { android.net.Uri.parse(u).host }.getOrNull()
+                            if (host == "m.vk.ru" || host == "m.vk.com" || host == "id.vk.ru" || host == "id.vk.com") {
+                                val rawJs = """
+                                    (function(){
+                                      if(location.protocol!=='https:' || ['m.vk.com','m.vk.ru','id.vk.com','id.vk.ru'].indexOf(location.hostname)<0) return null;
+                                      var found=[];
+                                      try {
+                                        for(var i=0;i<localStorage.length && i<500;i++) {
+                                          var key=localStorage.key(i);
+                                          if(!key || key.indexOf(':web_token:login:auth')<0) continue;
+                                          var value=JSON.parse(localStorage.getItem(key));
+                                          var items=Array.isArray(value)?value:[value];
+                                          items.forEach(function(x){if(x && typeof x.access_token==='string' && found.length<16) found.push(x);});
+                                        }
+                                      } catch(e) {}
+                                      var picked=null;
+                                      for(var j=0;j<found.length;j++){ if(found[j].is_active===true || found[j].is_active===undefined){ picked=found[j]; break; } }
+                                      return picked ? JSON.stringify(picked) : null;
+                                    })();
+                                """.trimIndent()
+                                val holder = arrayOfNulls<String>(1)
+                                wvNow.evaluateJavascript(rawJs, object : android.webkit.ValueCallback<String> {
+                                    override fun onReceiveValue(value: String?) { holder[0] = value }
+                                })
+                                val res = holder[0]
+                                if (!res.isNullOrBlank() && res != "null" && res.length >= 2 &&
+                                    res.startsWith("\"") && res.endsWith("\"")
+                                ) {
+                                    val inner = res.substring(1, res.length - 1)
+                                        .replace("\\\"", "\"")
+                                        .replace("\\\\", "\\")
+                                    val parsed = try {
+                                        com.google.gson.JsonParser.parseString(inner).asJsonObject
+                                    } catch (_: Exception) { null }
+                                    if (parsed != null) {
+                                        val at = parsed.get("access_token")?.takeIf { !it.isJsonNull }?.asString
+                                        val uid = parsed.get("user_id")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                                        if (!at.isNullOrBlank() && at.startsWith("vk1.a.") && uid > 0L) {
+                                            AppLog.i(TAG, "web_token найден в localStorage (user_id=$uid) — завершаем вход (#AUTH-V2-POLL)")
+                                            withContext(Dispatchers.Main) {
+                                                isExchanging = true
+                                                statusText = "Токен получен, вход выполнен…"
+                                                authToast("Токен получен, вход выполнен…")
+                                                onSilentTokenExchanged(at, uid)
+                                            }
+                                            return@launch
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    AppLog.d(TAG, "web_token polling (V2) error: ${e.message}")
+                }
+
                 val remixsid = getRemixSidFromCookieManager()
                 if (remixsid != null) {
                     val wv = webViewRef
@@ -667,15 +734,31 @@ fun VkAuthWebViewScreenV2(
                                 // #CALLS-AUTOCLICK (временный): на id.vk.ru/auth автоматически
                                 // нажимаем кнопку подтверждения входа (по тексту). Чтобы flow
                                 // дошёл до onTokenReceived → getCallToken без ручного клика.
-                                if (url?.contains("id.vk.ru/auth") == true) {
+                                //
+                                // #AUTH-2FA-FIX (2026-11-14): НЕ инжектим autoclick на странице
+                                // 2FA/challenge (URL содержит "br=ch", "challenge" или
+                                // "no_password" action). Там autoclick кликает по кнопке
+                                // «Продолжить» ДО ввода кода → VK не формирует challenge →
+                                // редирект с silent_token не происходит → белый экран.
+                                // Autoclick нужен только на SSO-подтверждении (обычный
+                                // id.vk.ru/auth без br=ch, где уже есть кнопка «Продолжить»).
+                                val is2faChallengePage = url?.let { u ->
+                                    val decoded = runCatching { java.net.URLDecoder.decode(u, "UTF-8") }
+                                        .getOrDefault(u)
+                                    decoded.contains("br=ch") ||
+                                        decoded.contains("challenge") ||
+                                        decoded.contains("no_password_flow") ||
+                                        decoded.contains("2fa")
+                                } == true
+                                if (url?.contains("id.vk.ru/auth") == true && !is2faChallengePage) {
                                     val autoClickJs = """
                                         (function(){
                                           var btns = document.querySelectorAll('button, [role="button"], a');
-                                          var targets = ['Продолжить','Продолжить как','Войти','Войти в VK','Продолжить вход'];
+                                          var targets = ['Продолжить как','Войти в VK','Продолжить вход','Войти'];
                                           for (var i=0;i<btns.length;i++){
                                             var t=(btns[i].textContent||'').trim();
                                             for (var j=0;j<targets.length;j++){
-                                              if (t===targets[j]||t.indexOf(targets[j])===0){
+                                              if (t.indexOf(targets[j])===0){
                                                 btns[i].click();
                                                 return;
                                               }
@@ -684,7 +767,9 @@ fun VkAuthWebViewScreenV2(
                                         })();
                                     """.trimIndent()
                                     view.evaluateJavascript(autoClickJs, null)
-                                    AppLog.i(TAG, "autoclick injected on id.vk.ru/auth")
+                                    AppLog.i(TAG, "autoclick injected on id.vk.ru/auth (NOT 2FA)")
+                                } else if (url?.contains("id.vk.ru/auth") == true) {
+                                    AppLog.d(TAG, "autoclick SKIPPED — 2FA/challenge страница (не кликаем до ввода кода)")
                                 }
                             } catch (e: Exception) {
                                 AppLog.w(TAG, "JS injection failed (onPageFinished): ${e.message}")

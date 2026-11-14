@@ -829,6 +829,14 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     /** true если хотя бы одна Activity в started state (видна пользователю). */
     fun isAnyActivityForeground(): Boolean = startedActivities > 0
 
+    /** Последняя started Activity (имя простого класса) или null если ни одной. */
+    @Volatile
+    private var lastStartedActivityClass: String? = null
+
+    /** Имя простого класса последней started Activity (для гардов типа AuthActivity). */
+    val activityClassName: String?
+        get() = lastStartedActivityClass
+
     override fun onCreate() {
         super.onCreate()
         // #PERSIST-LOG (Task 6-LOGGER-INFRA): ранний старт — краш-логгер должен
@@ -942,10 +950,14 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
         registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: android.app.Activity) {
                 startedActivities++
+                lastStartedActivityClass = activity.javaClass.simpleName
                 AppLog.d("SovaApp", "Activity started (${activity.javaClass.simpleName}), foreground count=$startedActivities")
             }
             override fun onActivityStopped(activity: android.app.Activity) {
                 startedActivities = (startedActivities - 1).coerceAtLeast(0)
+                if (lastStartedActivityClass == activity.javaClass.simpleName && startedActivities == 0) {
+                    lastStartedActivityClass = null
+                }
                 AppLog.d("SovaApp", "Activity stopped (${activity.javaClass.simpleName}), foreground count=$startedActivities")
             }
             override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {}

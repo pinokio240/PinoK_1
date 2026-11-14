@@ -794,6 +794,30 @@ object WebTokenAuth {
                 "falling back to clear+reload+poll")
         }
 
+        // #AUTH-HTTP-FIRST-ON-LIVE-REMIXSID (2026-11-14): если localStorage пуст
+        // / истёк (JS m.vk.ru не кладёт web_token на этой сессии), но CookieManager
+        // содержит ЖИВОЙ remixsid — HTTP Path 1.5 обменяет его на access_token за
+        // ~0.5–1с. Это надёжнее, чем ensureSdkInitialized + 25с polling (который
+        // в логах 14.11 стабильно FAILED). Вызываем до навигации на SDK-init,
+        // чтобы не навигировать WebView, если HTTP путь достаточен.
+        val liveRemixsid = runCatching {
+            re.pinok.auth.exchange.RemixsidCapturer.snapshotCookies()
+                ?.remixsid
+        }.getOrNull()
+        if (!liveRemixsid.isNullOrBlank()) {
+            AppLog.i(TAG, "waitForWebToken: remixsid жив (len=${liveRemixsid.length}) — " +
+                "пробуем HTTP silent refresh ДО ensureSdkInitialized " +
+                "(#AUTH-HTTP-FIRST-ON-LIVE-REMIXSID)")
+            val httpToken = trySsoHttpRefreshViaRemixsid()
+            if (httpToken != null) {
+                AppLog.i(TAG, "waitForWebToken: HTTP silent refresh OK — " +
+                    "access_token получен без WebView SDK-init (user_id=${httpToken.userId})")
+                return Result.success(httpToken)
+            }
+            AppLog.w(TAG, "waitForWebToken: HTTP silent refresh не сработал — " +
+                "продолжаем ensureSdkInitialized + polling")
+        }
+
         // §51 #VK-SSO-PATH-A (Fix VK app SSO auth-loop):
         // Если ни свежего, ни истёкшего web_token нет в localStorage — значит
         // мы в сценарии VK app SSO: remixsid cookie получен, но VK ID SDK JS

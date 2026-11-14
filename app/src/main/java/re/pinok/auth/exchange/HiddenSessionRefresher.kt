@@ -100,6 +100,16 @@ object HiddenSessionRefresher {
     var lastAttemptDefinitivelyDead: Boolean = false
         private set
 
+    /**
+     * #AUTH-RETRY-AFTER-WEBVIEW (2026-11-14): true если после последней попытки
+     * WEB-MECHANISM CookieManager всё ещё содержал ЖИВУЮ сессию (remixsid/p)
+     * — значит HTTP Path 1.5 остаётся возможным и стоит повторить его после
+     * провала WebView (сеть могла восстановиться за 25–60с WebView-цикла).
+     */
+    @Volatile
+    var wasHttpPathStillEligible: Boolean = false
+        private set
+
     @Volatile
     private var lastFailMs: Long = 0L
 
@@ -121,6 +131,24 @@ object HiddenSessionRefresher {
         }
         try {
             val now = System.currentTimeMillis()
+            // #AUTH-GUARD (2026-11-14): НЕ запускаем скрытый refresh, пока на
+            // переднем плане AuthActivity (пользователь вручную входит через
+            // VK ID). Скрытый refresh навигирует общий WebView на m.vk.ru/login
+            // (ensureSdkInitialized), что ПРЕРЫВАЕТ редирект VK ID после ввода
+            // номера → белый экран (лог 14.11: первый вход сломан, второй —
+            // без фонового refresh — работает). Войти вручную можно и без
+            // фонового вмешательства; silent-refresh вернётся после закрытия
+            // AuthActivity (MainActivity снова в foreground).
+            if (re.pinok.SovaApp.getOrNull()?.let { app ->
+                    app.isAnyActivityForeground() && app.activityClassName?.contains("AuthActivity") == true
+                } == true) {
+                AppLog.i(
+                    TAG,
+                    "refresh: AuthActivity на переднем плане — " +
+                        "скрытый refresh пропущен (#AUTH-GUARD: не мешаем ручному входу)"
+                )
+                return null
+            }
             // #IP-MISMATCH-REMIXNSID (2026-10-18): при remixnsid/p-сессии (VK ID
             // после входа в WebView) кулдаун НЕ блокирует — silent_token обмен
             // в WebView единственный шанс, частые смены IP не должны его глушить
@@ -137,7 +165,31 @@ object HiddenSessionRefresher {
                 )
                 return null
             }
+
+            // #AUTH-SKIP-WEBVIEW-ON-LIVE-REMIXSID (2026-11-14): если CookieManager
+            // содержит ЖИВОЙ remixsid (len>0), HTTP Path 1.5 (silentRefreshViaRemixsidLive)
+            // обменяет его на access_token за ~0.5–1с намного надёжнее, чем скрытый
+            // WebView (25–60с polling localStorage, который на этой сессии стабильно
+            // FAILED — web_token в localStorage не пишется). WebView-механизм нужен
+            // только когда remixsid пуст (VK ID / remixnsid-сессия).
+            val skipWebView = nsidCookies != null &&
+                !nsidCookies.remixsid.isNullOrBlank()
+            if (skipWebView) {
+                AppLog.i(
+                    TAG,
+                    "refresh: remixsid жив (len=${nsidCookies.remixsid.length}) — " +
+                        "WebView-механизм пропущен, HTTP Path 1.5 справится быстрее " +
+                        "(#AUTH-SKIP-WEBVIEW-ON-LIVE-REMIXSID)"
+                )
+                // Не «доказанно мертва» и не «провал»: просто отдаём управление HTTP-пути.
+                lastAttemptDefinitivelyDead = false
+                wasHttpPathStillEligible = true
+                return null
+            }
+
             lastAttemptDefinitivelyDead = false
+            // Сбрасываем флаг на старте каждой попытки (не использовать stale).
+            wasHttpPathStillEligible = false
             return withTimeoutOrNull(TOTAL_TIMEOUT_MS) { doRefresh(context) }
         } catch (e: Exception) {
             AppLog.w(TAG, "refresh: exception — ${e.message}")
@@ -192,12 +244,14 @@ object HiddenSessionRefresher {
         val cookies = runCatching { RemixsidCapturer.snapshotCookies() }.getOrNull()
         val noSessionCookies = cookies == null || !cookies.hasLiveSession
         lastAttemptDefinitivelyDead = noSessionCookies
+        wasHttpPathStillEligible = !noSessionCookies && !cookies.remixsid.isNullOrBlank()
         lastFailMs = System.currentTimeMillis()
         AppLog.w(
             TAG,
             "WEB-MECHANISM refresh: FAILED (definitivelyDead=$noSessionCookies, " +
                 "remixsid=${cookies?.remixsid?.length ?: "null"}, " +
-                "p=${if (cookies?.pCookie != null) "yes" else "no"})"
+                "p=${if (cookies?.pCookie != null) "yes" else "no"}, " +
+                "httpPathStillEligible=$wasHttpPathStillEligible)"
         )
         return null
     }
