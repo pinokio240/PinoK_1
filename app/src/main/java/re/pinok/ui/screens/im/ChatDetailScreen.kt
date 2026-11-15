@@ -7595,16 +7595,28 @@ private fun WallAttachmentCard(
 
     // --- Автор поста: fromId > 0 — пользователь, fromId < 0 — сообщество/канал. ---
     val isCommunity = post.fromId < 0
-    val profile = if (post.fromId > 0) profiles[post.fromId] else null
+    // #WALL-CARD-GROUP-FIX: getHistory хранит группы в profiles map (как UserProfile
+    // с ОТРИЦАТЕЛЬНЫМ ID — firstName=name, photo100=avatar, см. VKApiClient.kt:1577),
+    // а НЕ в groups map (GroupInfo). Раньше искали только groups[-fromId] → для
+    // пересланных постов сообщества group=null (GroupInfo-мап не заполнен для
+    // wall-владельцев) → аватар/имя НЕ показывались. Теперь проверяем ОБА:
+    // 1) groups[-fromId] (GroupInfo — если заполнен отдельно, напр. для канала-пира)
+    // 2) profiles[fromId] (UserProfile с отрицательным ID — из getHistory response.groups[])
+    val profile = profiles[post.fromId]  // fromId>0 — юзер; fromId<0 — группа (из getHistory)
     val group = if (post.fromId < 0) groups[-post.fromId] else null
     val authorAvatar: String? = when {
-        profile != null -> profile.photo100 ?: profile.photo200
         group != null -> group.photoBase ?: group.photo100 ?: group.photo200
+        profile != null -> profile.photo100 ?: profile.photo200
         else -> null
     }
     val authorName: String = when {
-        profile != null -> "${profile.firstName} ${profile.lastName}".trim().ifBlank { "id${post.fromId}" }
         group != null -> group.name.ifBlank { "Сообщество" }
+        profile != null -> if (isCommunity) {
+            // Сообщество из getHistory: firstName = название группы, lastName = "".
+            profile.firstName.trim().ifBlank { "Сообщество" }
+        } else {
+            "${profile.firstName} ${profile.lastName}".trim().ifBlank { "id${post.fromId}" }
+        }
         post.fromId > 0 -> "id${post.fromId}"
         else -> "Сообщество"
     }
