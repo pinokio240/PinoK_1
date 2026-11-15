@@ -24541,3 +24541,25 @@ Work Log:
 SettingsScreen (импорт бэкапа — чтение, не upload); ChatDetailScreen (уже на стриминге); File-версии VKApiClient.
 
 Метрики: 9 файлов, +398/-225. Проверки: check-nested-comments OK, баланс скобок OK.
+
+## 2026-11-15 — refactor(api): удаление мёртвых File-версий upload-функций
+
+После #UPLOAD-STREAM-UNIFY (58587bf) в VKApiClient.kt остались 6 File-вариантов
+upload-функций БЕЗ вызовов (UI переведён на Uri-варианты). Удалены как dead code:
+
+- uploadPhotoForMessage(peerId, file, mime) — был заменён uploadPhotoForMessageUri
+- uploadDocForMessage(file, mime) — заменён uploadDocForMessageUri
+- uploadAndSendVideo(peerId, file, ...) — заменён uploadAndSendVideoUri
+- photosUploadWallPhoto(uploadUrl, file, mime) — вызывался только двумя выше
+- uploadPhotoForComment(file, mime) — заменён uploadPhotoForCommentUri
+- uploadDocForComment(file, mime) — заменён uploadDocForCommentUri
+
+Также: почищены 2 stale-KDoc строки «File-версия осталась для легаси-вызовов»
+в uploadPhotoForCommentUri / uploadDocForCommentUri.
+
+guessMimeType(filename) остаётся живой (2 вызова в uploadDocForMessageUri /
+uploadAndSendVideoUri). guessMimeTypeFromUri / guessMimeTypeFromExtension — живы.
+
+Проверки: check-nested-comments OK. Brace-balance: delta -1 объяснён строковым
+литералом "{" в удалённой uploadDocForMessage (startsWith("{")) — артефакт
+наивного сканера, реально баланс сохранён (удалены целые сбалансированные функции).
