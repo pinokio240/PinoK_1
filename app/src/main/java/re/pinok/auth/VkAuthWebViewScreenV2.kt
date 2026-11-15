@@ -740,8 +740,14 @@ fun VkAuthWebViewScreenV2(
                                 // "no_password" action). Там autoclick кликает по кнопке
                                 // «Продолжить» ДО ввода кода → VK не формирует challenge →
                                 // редирект с silent_token не происходит → белый экран.
-                                // Autoclick нужен только на SSO-подтверждении (обычный
-                                // id.vk.ru/auth без br=ch, где уже есть кнопка «Продолжить»).
+                                // #AUTH-AUTOCLICK-FIX (2026-11-15): сузили таргеты до ТОЛЬКО
+                                // «Продолжить как» (SSO-подтверждение). Раньше targets включали
+                                // «Войти»/«Войти в VK»/«Продолжить вход» → autoclick срабатывал
+                                // на странице ввода ТЕЛЕФОНА и ПАРОЛЯ (onPageFinished до ввода)
+                                // → сабмитил пустую форму → VK редиректил на blank/error →
+                                // БЕЛЫЙ ЭКРАН + SMS не приходило (flow не доходил до 2FA/phone).
+                                // «Продолжить как [Имя]» есть только на SSO-странице (когда VK
+                                // уже знает сессию с другого устройства) — там autoclick безопасен.
                                 val is2faChallengePage = url?.let { u ->
                                     val decoded = runCatching { java.net.URLDecoder.decode(u, "UTF-8") }
                                         .getOrDefault(u)
@@ -753,21 +759,22 @@ fun VkAuthWebViewScreenV2(
                                 if (url?.contains("id.vk.ru/auth") == true && !is2faChallengePage) {
                                     val autoClickJs = """
                                         (function(){
+                                          // #AUTH-AUTOCLICK-FIX: кликаем ТОЛЬКО «Продолжить как [Name]»
+                                          // (SSO-подтверждение). Кнопки «Войти»/«Продолжить» НЕ кликаем —
+                                          // они есть на страницах ввода телефона/пароля, и автоклик по
+                                          // ним сабмитил пустую форму → белый экран, SMS не приходило.
                                           var btns = document.querySelectorAll('button, [role="button"], a');
-                                          var targets = ['Продолжить как','Войти в VK','Продолжить вход','Войти'];
                                           for (var i=0;i<btns.length;i++){
                                             var t=(btns[i].textContent||'').trim();
-                                            for (var j=0;j<targets.length;j++){
-                                              if (t.indexOf(targets[j])===0){
-                                                btns[i].click();
-                                                return;
-                                              }
+                                            if (t.indexOf('Продолжить как')===0){
+                                              btns[i].click();
+                                              return;
                                             }
                                           }
                                         })();
                                     """.trimIndent()
                                     view.evaluateJavascript(autoClickJs, null)
-                                    AppLog.i(TAG, "autoclick injected on id.vk.ru/auth (NOT 2FA)")
+                                    AppLog.i(TAG, "autoclick injected on id.vk.ru/auth — SSO «Продолжить как» only (phone/password pages NOT clicked)")
                                 } else if (url?.contains("id.vk.ru/auth") == true) {
                                     AppLog.d(TAG, "autoclick SKIPPED — 2FA/challenge страница (не кликаем до ввода кода)")
                                 }
