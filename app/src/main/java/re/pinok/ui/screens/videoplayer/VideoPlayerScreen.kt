@@ -1058,7 +1058,7 @@ fun VideoPlayerScreen(
     // переживает пересоздание плеера после fresh и не сбрасывается на нём,
     // предотвращая зацикливание "400 → fresh → resolvedVideo=fresh → плеер
     // пересоздан → 400 → fresh…". Сбрасывается при STATE_READY.
-    var http400FreshAttempts by remember { mutableIntStateOf(0) }
+    var http400FreshAttempts by remember(video) { mutableIntStateOf(0) }
 
     // #NET-GRACE: счётчик IO-network-error retry для видео. ExoPlayer кидает
     // ERROR_CODE_IO_NETWORK_CONNECTION_FAILED / _TIMEOUT / _UNSPECIFIED при

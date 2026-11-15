@@ -10942,9 +10942,11 @@ object StickerAnimationCache {
         for (pack in packs) {
             for (sticker in pack.stickers ?: emptyList()) {
                 val animUrl = sticker.animationUrl ?: continue
-                // Lottie (.json/.tgs) не декодируется Coil — пропускаем.
-                val lower = animUrl.substringBefore('?').substringAfterLast('/').lowercase()
-                if (lower.endsWith(".json") || lower.endsWith(".tgs")) continue
+                // #STICKER-LOTTIE-AUDIT: Lottie (.json/.tgs) больше НЕ пропускаем —
+                // теперь AnimatedStickerView рендерит их через lottie-compose. Кешируем
+                // URL для fallback'а (enrichedAnimUrl = sticker.animationUrl ?:
+                // StickerAnimationCache.get(stickerId)) — TGS-стикеры в сообщениях
+                // (где VK не отдаёт animation_url) получают Lottie-URL из кеша паков.
                 cache[sticker.stickerId] = animUrl
             }
         }

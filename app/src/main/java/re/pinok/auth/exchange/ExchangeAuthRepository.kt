@@ -108,7 +108,7 @@ class ExchangeAuthRepository(
         appContext = ctx.applicationContext
     }
 
-    /** True если сеть сейчас недоступна (по [NetworkObserver.isOnline]). */    /** True если сеть сейчас недоступна (по [NetworkObserver.isOnline]). */
+    /** True если сеть сейчас недоступна (по [NetworkObserver.isOnline]). */
     fun isOffline(): Boolean = networkObserver?.isOnline() == false
 
     /**

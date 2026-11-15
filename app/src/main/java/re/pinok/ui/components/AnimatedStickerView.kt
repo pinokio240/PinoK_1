@@ -70,6 +70,8 @@ fun AnimatedStickerView(
             lottieCache[url] = comp
             composition = comp
             if (comp == null) failed = true
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
         } catch (e: Exception) {
             AppLog.e("AnimatedSticker", "failed to load lottie $url", e)
             failed = true

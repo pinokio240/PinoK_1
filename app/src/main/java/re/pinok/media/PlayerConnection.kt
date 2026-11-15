@@ -1662,11 +1662,28 @@ object PlayerConnection {
                             try {
                                 val fresh = re.pinok.SovaApp.getOrNull()?.apiClient
                                     ?.audioGetById(track)
-                                if (fresh != null && !fresh.url.isNullOrBlank() && fresh.url != track.url) {
+                                // #AUDIO-INTRO-FIX-AUDIT: захват fresh.url в локальный val (smart-cast)
+                                // + проверка audio_api_unavailable (masked URL не давать в ExoPlayer).
+                                val freshUrl = fresh?.url
+                                if (fresh != null && !freshUrl.isNullOrBlank() && freshUrl != track.url &&
+                                    !freshUrl.contains("audio_api_unavailable", ignoreCase = true)
+                                ) {
                                     AppLog.i(TAG, "#AUDIO-INTRO-FIX: fresh URL obtained for #${track.id}, replaying from 0 (was truncated)")
                                     withController { c ->
-                                        c.setMediaItem(fresh.toMediaItem(), 0L)
+                                        // #AUDIO-INTRO-FIX-AUDIT (BUG fix): guard — если трек уже сменился
+                                        // (AUTO-advance после STATE_ENDED), НЕ трогаем плейлист. Раньше
+                                        // setMediaItem заменял ВЕСЬ плейлист одним треком → очередь
+                                        // разрушалась, next track прерывался. Теперь проверяем currentTrack.
+                                        if (currentTrack?.id != track.id) {
+                                            AppLog.w(TAG, "#AUDIO-INTRO-FIX: stale refresh — track #${track.id} already advanced to #${currentTrack?.id}, skip (playlist preserved)")
+                                            return@withController
+                                        }
+                                        // #AUDIO-INTRO-FIX-AUDIT: replaceMediaItems вместо setMediaItem —
+                                        // сохраняет плейлист, меняет только текущий трек на fresh URL.
+                                        val idx = c.currentMediaItemIndex
+                                        c.replaceMediaItems(idx, listOf(fresh.toMediaItem()))
                                         c.prepare()
+                                        c.seekTo(0L)
                                         c.playWhenReady = true
                                     }
                                 } else {
@@ -1874,12 +1891,24 @@ object PlayerConnection {
                         try {
                             val fresh = re.pinok.SovaApp.getOrNull()?.apiClient
                                 ?.audioGetById(track)
-                            if (fresh != null && !fresh.url.isNullOrBlank() && fresh.url != track.url) {
+                            // #AUDIO-INTRO-FIX-AUDIT: smart-cast fresh.url + audio_api_unavailable check.
+                            val freshUrl = fresh?.url
+                            if (fresh != null && !freshUrl.isNullOrBlank() && freshUrl != track.url &&
+                                !freshUrl.contains("audio_api_unavailable", ignoreCase = true)
+                            ) {
                                 val posMs = _playerState.value.positionMs
                                 AppLog.i(TAG, "#AUDIO-INTRO-FIX: fresh URL obtained for #${track.id}, replaying from ${posMs}ms")
                                 withController { c ->
-                                    c.setMediaItem(fresh.toMediaItem(), posMs)
+                                    // #AUDIO-INTRO-FIX-AUDIT (BUG fix): guard + replaceMediaItems
+                                    // вместо setMediaItem — сохраняет плейлист.
+                                    if (currentTrack?.id != track.id) {
+                                        AppLog.w(TAG, "#AUDIO-INTRO-FIX: stale refresh (onPlayerError) — track #${track.id} changed to #${currentTrack?.id}, skip (playlist preserved)")
+                                        return@withController
+                                    }
+                                    val idx = c.currentMediaItemIndex
+                                    c.replaceMediaItems(idx, listOf(fresh.toMediaItem()))
                                     c.prepare()
+                                    c.seekTo(posMs)
                                     c.playWhenReady = true
                                 }
                             } else {
