@@ -1681,7 +1681,7 @@ object PlayerConnection {
                                         // #AUDIO-INTRO-FIX-AUDIT: replaceMediaItems вместо setMediaItem —
                                         // сохраняет плейлист, меняет только текущий трек на fresh URL.
                                         val idx = c.currentMediaItemIndex
-                                        c.replaceMediaItems(idx, listOf(fresh.toMediaItem()))
+                                        c.replaceMediaItem(idx, fresh.toMediaItem())
                                         c.prepare()
                                         c.seekTo(0L)
                                         c.playWhenReady = true
@@ -1906,7 +1906,7 @@ object PlayerConnection {
                                         return@withController
                                     }
                                     val idx = c.currentMediaItemIndex
-                                    c.replaceMediaItems(idx, listOf(fresh.toMediaItem()))
+                                    c.replaceMediaItem(idx, fresh.toMediaItem())
                                     c.prepare()
                                     c.seekTo(posMs)
                                     c.playWhenReady = true

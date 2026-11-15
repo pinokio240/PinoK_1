@@ -15737,3 +15737,7 @@ eturn try {), сломав messagesGetHistory/ConversationsById.
 **Фикс (Вася):** version=5, clientType=VK, capabilities=6D7F, tgt=start в WS-URL. Сборка на пользователе.
 
 ### ПРАВИЛО #7: HISTORY.md дополняется ПОСЛЕ ЛЮБОГО изменения в проекте. Без исключений.
+
+## FIX-REPLACE-MEDIA-ITEM — 2026-11-15 — компиляция: replaceMediaItems без toIndex
+**Причина:** e: PlayerConnection.kt:1684:66 / 1909:62 — в Media3 у replaceMediaItems сигнатура (fromIndex, toIndex, items), двухаргументного варианта нет; список попадал в параметр toIndex: Int.
+**Фикс:** обе точки #AUDIO-INTRO-FIX переведены на однопозиционный c.replaceMediaItem(idx, fresh.toMediaItem()) — плейлист сохраняется, меняется только текущий элемент.
