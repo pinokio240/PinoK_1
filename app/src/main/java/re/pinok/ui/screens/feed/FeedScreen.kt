@@ -2889,30 +2889,16 @@ private fun extractDomain(url: String): String {
     } catch (_: Exception) { url }
 }
 
-private fun formatDocSize(size: Long): String = when {
-    size < 1024 -> "${size} Б"
-    size < 1024 * 1024 -> "${size / 1024} КБ"
-    else -> String.format("%.1f МБ", size / 1024.0 / 1024.0)
-}
+private fun formatDocSize(size: Long): String =
+    re.pinok.util.formatFileSize(size)
 
 /**
  * #ATTACH-UNIFY (P0.2): URI для снимка камеры через FileProvider (cache-path
  * заявлен в manifest, authority «<pkg>.fileprovider» — паттерн 1:1 из
  * ChatDetailScreen.createCameraImageUri). null — FileProvider не настроен.
  */
-private fun createCameraImageUri(ctx: android.content.Context): Uri? {
-    return try {
-        val photoFile = File(ctx.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-        androidx.core.content.FileProvider.getUriForFile(
-            ctx,
-            "${ctx.packageName}.fileprovider",
-            photoFile,
-        )
-    } catch (e: Exception) {
-        AppLog.e("CommentsBottomSheet", "createCameraImageUri failed", e)
-        null
-    }
-}
+private fun createCameraImageUri(ctx: android.content.Context): Uri? =
+    re.pinok.util.createCameraImageUri(ctx)
 
 /**
  * #ATTACH-UNIFY: Saver для Uri — rememberSaveable переживает process death

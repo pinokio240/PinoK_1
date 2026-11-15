@@ -2150,13 +2150,7 @@ private fun BoardCommentCard(
                                 onClick = {
                                     showMenu = false
                                     val url = "https://vk.com/topic${-groupId}_${topicId}?post=${comment.id}"
-                                    val clipboard = ctx.getSystemService(
-                                        android.content.Context.CLIPBOARD_SERVICE,
-                                    ) as android.content.ClipboardManager
-                                    clipboard.setPrimaryClip(
-                                        android.content.ClipData.newPlainText("Ссылка", url),
-                                    )
-                                    Toast.makeText(ctx, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
+                                    re.pinok.util.copyTextToClipboard(ctx, url, "Ссылка скопирована")
                                 },
                             )
                             // FIX-3: пункт «Пожаловаться» на board-коммент убран —
@@ -2774,19 +2768,8 @@ private fun ComposerRow(
  * manifest, authority «<pkg>.fileprovider»). Паттерн 1:1 из PostDetailScreen
  * createCameraImageUri (L2284). null — FileProvider не настроен.
  */
-private fun createCameraImageUri(ctx: android.content.Context): Uri? {
-    return try {
-        val photoFile = File(ctx.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-        androidx.core.content.FileProvider.getUriForFile(
-            ctx,
-            "${ctx.packageName}.fileprovider",
-            photoFile,
-        )
-    } catch (e: Exception) {
-        AppLog.e("BoardTopicScreen", "createCameraImageUri failed", e)
-        null
-    }
-}
+private fun createCameraImageUri(ctx: android.content.Context): Uri? =
+    re.pinok.util.createCameraImageUri(ctx)
 
 /**
  * FIX-TODO-1 #1: Saver для Uri — rememberSaveable переживает process death во

@@ -269,7 +269,6 @@ import re.pinok.ui.anim.tweenScaled
 import re.pinok.ui.theme.UiScale
 import re.pinok.ui.theme.appImePadding
 import re.pinok.media.VoiceRecorder
-import java.text.DecimalFormat
 import re.pinok.realtime.LongPollEvent
 import re.pinok.ui.components.ForwardDialog
 import re.pinok.ui.components.AttachmentPickerSheet
@@ -9688,11 +9687,8 @@ private fun DocAttachmentCard(
     }
 }
 
-private fun formatFileSize(bytes: Long): String {
-    if (bytes < 1024) return "$bytes Б"
-    if (bytes < 1024 * 1024) return DecimalFormat("#.#").format(bytes / 1024.0) + " КБ"
-    return DecimalFormat("#.#").format(bytes / (1024.0 * 1024.0)) + " МБ"
-}
+private fun formatFileSize(bytes: Long): String =
+    re.pinok.util.formatFileSize(bytes, decimals = true)
 
 /**
  * Fix #295 (round 2): блок «Пересланное сообщение» с полным содержимым.
@@ -12311,19 +12307,8 @@ private fun ChannelSearchPanel(
  * P5.3: Создаёт временный URI для сохранения фото с камеры через FileProvider.
  * Возвращает null если FileProvider не настроен или нет кеш-директории.
  */
-private fun createCameraImageUri(ctx: android.content.Context): android.net.Uri? {
-    return try {
-        val photoFile = java.io.File(ctx.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-        androidx.core.content.FileProvider.getUriForFile(
-            ctx,
-            "${ctx.packageName}.fileprovider",
-            photoFile,
-        )
-    } catch (e: Exception) {
-        AppLog.e("ChatDetailScreen", "createCameraImageUri failed", e)
-        null
-    }
-}
+private fun createCameraImageUri(ctx: android.content.Context): android.net.Uri? =
+    re.pinok.util.createCameraImageUri(ctx)
 
 /**
  * Fix #126: Saver для Uri — позволяет rememberSaveable хранить Uri в Bundle.

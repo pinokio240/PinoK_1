@@ -1905,8 +1905,5 @@ private fun DocRow(
 }
 
 /** Человекочитаемый размер файла (локальный хелпер таба «Документы»). */
-private fun formatDocSizeShort(size: Long): String = when {
-    size < 1024 -> "$size Б"
-    size < 1024 * 1024 -> "${size / 1024} КБ"
-    else -> String.format("%.1f МБ", size / 1024.0 / 1024.0)
-}
+private fun formatDocSizeShort(size: Long): String =
+    re.pinok.util.formatFileSize(size)

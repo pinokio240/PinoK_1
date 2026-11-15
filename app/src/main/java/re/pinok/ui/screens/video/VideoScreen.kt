@@ -1408,9 +1408,7 @@ private fun VideoMoreMenu(
             leadingIcon = { Icon(Icons.Outlined.Search, null, tint = accentColor) },
             onClick = {
                 onDismiss()
-                val clipboard = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("video", "https://vk.com/video${video.ownerId}_${video.id}"))
-                android.widget.Toast.makeText(ctx, "Ссылка скопирована", android.widget.Toast.LENGTH_SHORT).show()
+                re.pinok.util.copyTextToClipboard(ctx, "https://vk.com/video${video.ownerId}_${video.id}", "Ссылка скопирована")
             },
         )
     }

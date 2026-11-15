@@ -2727,14 +2727,8 @@ private fun ChannelRecommendationCard(
     // #CHANNEL-UI2 (Task 3): копирование ссылки канала в буфер (паттерн
     // ShareSheet doCopyLink — ClipboardManager).
     fun copyChannelLink() {
-        val cm = cardContext.getSystemService(android.content.ClipboardManager::class.java)
-        if (cm != null) {
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("VK", channelLink))
-            Toast.makeText(cardContext, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
-            AppLog.i("MessagesScreen", "#CHANNEL-UI2: copied channel link $channelLink")
-        } else {
-            Toast.makeText(cardContext, "Не удалось получить буфер обмена", Toast.LENGTH_SHORT).show()
-        }
+        re.pinok.util.copyTextToClipboard(cardContext, channelLink, "Ссылка скопирована", "MessagesScreen")
+        AppLog.i("MessagesScreen", "#CHANNEL-UI2: copied channel link $channelLink")
     }
 
     // #CHANNEL-UI2 (Task 3): системный шаринг ссылки через ACTION_SEND

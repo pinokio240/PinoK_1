@@ -3057,13 +3057,7 @@ fun CommunityScreen(
                         onClick = {
                             showTopicMenu = null
                             val url = "https://vk.com/topic-${groupId}_${menuTopic.id}"
-                            val clipboard = ctx.getSystemService(
-                                android.content.Context.CLIPBOARD_SERVICE,
-                            ) as android.content.ClipboardManager
-                            clipboard.setPrimaryClip(
-                                android.content.ClipData.newPlainText("Ссылка", url),
-                            )
-                            Toast.makeText(ctx, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
+                            re.pinok.util.copyTextToClipboard(ctx, url, "Ссылка скопирована")
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Скопировать ссылку") }

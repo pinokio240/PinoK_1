@@ -1093,9 +1093,7 @@ private fun BookmarkPostCard(
                     icon = androidx.compose.material.icons.Icons.Outlined.Link,
                     onClick = {
                         val url = "https://vk.com/wall${post.ownerId}_${post.id}"
-                        val clipboard = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Ссылка", url))
-                        Toast.makeText(ctx, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
+                        re.pinok.util.copyTextToClipboard(ctx, url, "Ссылка скопирована")
                     },
                 ))
                 // «Удалить» — только если пост от текущего пользователя или админ сообщества

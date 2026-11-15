@@ -1,7 +1,6 @@
 // File: ui/screens/community/AdminChatsScreen.kt
 package re.pinok.ui.screens.community
 
-import android.content.ClipData
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.clickable
@@ -363,10 +362,7 @@ fun AdminChatsScreen(
             confirmButton = {
                 if (!linkErr && !link.isNullOrBlank()) {
                     TextButton(onClick = {
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE)
-                            as android.content.ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("link", link.orEmpty()))
-                        Toast.makeText(context, "Скопировано", Toast.LENGTH_SHORT).show()
+                        re.pinok.util.copyTextToClipboard(context, link.orEmpty(), "Скопировано")
                     }) { Text("Копировать") }
                 }
             },

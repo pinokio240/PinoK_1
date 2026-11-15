@@ -116,6 +116,23 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
     override lateinit var httpClient: OkHttpClient
         private set
 
+    /**
+     * Отдельный OkHttp-клиент ТОЛЬКО для загрузки картинок (Coil).
+     *
+     * #IMAGE-FAST-LOAD (2026-11-15): раньше Coil использовал тот же [httpClient],
+     * что и все API-вызовы/LongPoll/auth. Это значило:
+     *  - картинки делили connection pool с тяжёлыми запросами и ждали слот;
+     *  - NetworkRetryInterceptor (backoff 500/1000мс) ретраил сбои CDN VK,
+     *    добавляя секунды к каждой упавшей картинке;
+     *  - спец-заголовки (X-VK-Android-Client, Client-Agent…) шли и на CDN фото,
+     *    хотя там не нужны.
+     * Отдельный клиент: свой пул, НЕТ ретраев, короткие таймауты. CDN-картинка
+     * либо загружается сразу, либо быстро падает и переподгружается Coil'ом
+     * при следующем recompose — без многсекундных зависаний на Wi-Fi.
+     */
+    lateinit var imageHttpClient: OkHttpClient
+        private set
+
     override lateinit var apiClient: VKApiClient
 
     /**
@@ -1511,6 +1528,18 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
             // Должен быть ПОСЛЕДНИМ application interceptor — работает с финальным
             // request после away-bypass/ad-block преобразований.
             .addInterceptor(NetworkInterceptors.NetworkRetryInterceptor())
+            .build()
+
+        // #IMAGE-FAST-LOAD: отдельный клиент для картинок (без ретраев, свой пул).
+        // Не переиспользуем builder (он забит спец-хедерами и ретраями для API).
+        imageHttpClient = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .connectionPool(okhttp3.ConnectionPool(8, 5, TimeUnit.MINUTES))
             .build()
 
         // 3. Exchange-token auth repository — phone+password+2FA flow, refresh, LongPoll.
@@ -3483,9 +3512,14 @@ class SovaApp : Application(), SingletonImageLoader.Factory, CallsDependencies, 
      *    (GIF только, animated WebP НЕ поддерживается — стикеры покажутся статичными).
      */
     override fun newImageLoader(context: PlatformContext): ImageLoader {
+        // #IMAGE-FAST-LOAD: используем ОТДЕЛЬНЫЙ клиент для картинок (не httpClient),
+        // чтобы фото не конкурировали за пул с API/LongPoll и не ретраились
+        // NetworkRetryInterceptor'ом. Если imageHttpClient ещё не готов (крайний
+        // случай) — fallback на httpClient.
+        val client = if (::imageHttpClient.isInitialized) imageHttpClient else httpClient
         return ImageLoader.Builder(context)
             .components {
-                add(OkHttpNetworkFetcherFactory(callFactory = httpClient))
+                add(OkHttpNetworkFetcherFactory(callFactory = client))
                 // Fix #IM-REACTIONS-SVG: картинки реакций VK (getReactionsAssets
                 // links.static) — SVG с vkuserphoto.ru, без декодера не грузятся.
                 add(coil3.svg.SvgDecoder.Factory())

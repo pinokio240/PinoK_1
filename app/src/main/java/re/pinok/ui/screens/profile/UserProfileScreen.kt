@@ -1,6 +1,9 @@
 // File: ui/screens/profile/UserProfileScreen.kt
 package re.pinok.ui.screens.profile
 
+import re.pinok.ui.components.TabEmptyRow
+import re.pinok.ui.components.TabErrorRow
+import re.pinok.ui.components.TabProgressRow
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -726,9 +729,7 @@ fun UserProfileScreen(
                                         // ClipboardManager (LocalClipboardManager
                                         // deprecated в Compose 1.8+).
                                         val url = "https://vk.com/${p.domain ?: p.screenName ?: "id${p.id}"}"
-                                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        cm.setPrimaryClip(ClipData.newPlainText("vk_profile_link", url))
-                                        Toast.makeText(context, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
+                                        re.pinok.util.copyTextToClipboard(context, url, "Ссылка скопирована")
                                     },
                                 )
                                 DropdownMenuItem(

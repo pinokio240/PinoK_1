@@ -2258,11 +2258,7 @@ composable(Screen.CallsHistory.route) {
                             },
                             onCopyLink = {
                                 val link = "https://vk.com/clip${clip.ownerId}_${clip.id}"
-                                val cm = nav.context.getSystemService(android.content.ClipboardManager::class.java)
-                                cm?.setPrimaryClip(android.content.ClipData.newPlainText("VK Clip", link))
-                                android.widget.Toast.makeText(
-                                    nav.context, "Ссылка скопирована", android.widget.Toast.LENGTH_SHORT,
-                                ).show()
+                                re.pinok.util.copyTextToClipboard(nav.context, link, "Ссылка скопирована")
                             },
                         )
                     }
@@ -2338,11 +2334,7 @@ composable(Screen.CallsHistory.route) {
                             },
                             onCopyLink = {
                                 val link = "https://vk.com/clip${clip.ownerId}_${clip.id}"
-                                val cm = nav.context.getSystemService(android.content.ClipboardManager::class.java)
-                                cm?.setPrimaryClip(android.content.ClipData.newPlainText("VK Clip", link))
-                                android.widget.Toast.makeText(
-                                    nav.context, "Ссылка скопирована", android.widget.Toast.LENGTH_SHORT,
-                                ).show()
+                                re.pinok.util.copyTextToClipboard(nav.context, link, "Ссылка скопирована")
                             },
                             onToggleNotifications = {
                                 vm.toggleNotifications(clip)

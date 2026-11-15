@@ -1,5 +1,8 @@
 package re.pinok.ui.screens.profile
 
+import re.pinok.ui.components.TabEmptyRow
+import re.pinok.ui.components.TabErrorRow
+import re.pinok.ui.components.TabProgressRow
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -3186,46 +3189,6 @@ private fun WallFilterRow(selected: String, showArchive: Boolean, onSelect: (Str
         if (showArchive) add(WALL_FILTER_ARCHIVED to "Архив")
     }
     ProfileChipsRow(options = filters, selected = selected, onSelect = onSelect)
-}
-
-@Composable
-internal fun TabProgressRow() {
-    Box(
-        modifier = Modifier.fillMaxWidth().padding(24.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
-    }
-}
-
-@Composable
-internal fun TabErrorRow(message: String, onRetry: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxWidth().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
-        )
-        Spacer(Modifier.height(8.dp))
-        TextButton(onClick = onRetry) { Text("Повторить") }
-    }
-}
-
-@Composable
-internal fun TabEmptyRow(message: String) {
-    Box(
-        modifier = Modifier.fillMaxWidth().padding(24.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
 }
 
 /** W33-c: строка трека полного раздела «Музыка» (вертикальный список,

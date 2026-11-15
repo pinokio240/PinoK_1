@@ -644,9 +644,7 @@ fun ChatInfoScreen(
                                 .clickable {
                                     val link = inviteLink
                                     if (link != null) {
-                                        val cm = context.getSystemService(android.content.ClipboardManager::class.java)
-                                        cm?.setPrimaryClip(android.content.ClipData.newPlainText("VK invite", link))
-                                        Toast.makeText(context, "Ссылка-приглашение скопирована", Toast.LENGTH_SHORT).show()
+                                        re.pinok.util.copyTextToClipboard(context, link, "Ссылка-приглашение скопирована")
                                     }
                                 }
                                 .padding(horizontal = 16.dp, vertical = 14.dp),

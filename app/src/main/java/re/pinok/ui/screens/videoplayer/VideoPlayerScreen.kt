@@ -2343,8 +2343,7 @@ fun VideoPlayerScreen(
         }
         val cm = context.getSystemService(android.content.ClipboardManager::class.java)
         if (cm != null) {
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("VK Video", link))
-            toast("Ссылка скопирована")
+            re.pinok.util.copyTextToClipboard(context, link, "Ссылка скопирована")
         } else {
             toast("Не удалось скопировать ссылку")
         }
@@ -4511,10 +4510,7 @@ private fun VideoShareSheet(
                     // Реальная ссылка на видео — в буфер обмена.
                     val cm = context.getSystemService(android.content.ClipboardManager::class.java)
                     if (cm != null) {
-                        cm.setPrimaryClip(android.content.ClipData.newPlainText("VK Video", videoLink))
-                        android.widget.Toast.makeText(
-                            context, "Ссылка скопирована", android.widget.Toast.LENGTH_SHORT,
-                        ).show()
+                        re.pinok.util.copyTextToClipboard(context, videoLink.orEmpty(), "Ссылка скопирована")
                     } else {
                         android.widget.Toast.makeText(
                             context, "Не удалось скопировать ссылку", android.widget.Toast.LENGTH_SHORT,

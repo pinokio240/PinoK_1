@@ -510,9 +510,8 @@ fun ShareSheet(
             if (cm == null) {
                 statusMsg = "Не удалось получить буфер обмена"
             } else {
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("VK", l))
+                re.pinok.util.copyTextToClipboard(context, l, "Ссылка скопирована", "ShareSheet")
                 AppLog.i("ShareSheet", "Link copied: $l")
-                Toast.makeText(context, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
             }
         }
     }

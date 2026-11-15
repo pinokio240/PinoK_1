@@ -122,7 +122,6 @@ import re.pinok.util.AppLog
 import re.pinok.ui.components.PendingPhotosBar
 import re.pinok.ui.components.PendingPhoto
 import re.pinok.ui.components.nextPendingPhotoId
-import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -2290,11 +2289,8 @@ internal fun ReplyItem(
 }
 
 /** Fix #237: форматирование размера файла для чипа документа в комментарии. */
-private fun formatFileSize(bytes: Long): String {
-    if (bytes < 1024) return "$bytes Б"
-    if (bytes < 1024 * 1024) return DecimalFormat("#.#").format(bytes / 1024.0) + " КБ"
-    return DecimalFormat("#.#").format(bytes / (1024.0 * 1024.0)) + " МБ"
-}
+private fun formatFileSize(bytes: Long): String =
+    re.pinok.util.formatFileSize(bytes, decimals = true)
 
 // ══════════════════════════════════════════════════════════════════════
 // Fix #237: multi-file + emoji для композера комментария (как в чате).
@@ -2323,19 +2319,8 @@ fun nextPendingCommentFileId(): Long = commentFileIdCounter.incrementAndGet()
  * заявлен в manifest, authority «<pkg>.fileprovider» — паттерн 1:1 из
  * ChatDetailScreen.createCameraImageUri). null — FileProvider не настроен.
  */
-private fun createCameraImageUri(ctx: android.content.Context): Uri? {
-    return try {
-        val photoFile = File(ctx.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-        androidx.core.content.FileProvider.getUriForFile(
-            ctx,
-            "${ctx.packageName}.fileprovider",
-            photoFile,
-        )
-    } catch (e: Exception) {
-        AppLog.e("PostDetail", "createCameraImageUri failed", e)
-        null
-    }
-}
+private fun createCameraImageUri(ctx: android.content.Context): Uri? =
+    re.pinok.util.createCameraImageUri(ctx)
 
 /**
  * #ATTACH-UNIFY: Saver для Uri — rememberSaveable переживает process death
