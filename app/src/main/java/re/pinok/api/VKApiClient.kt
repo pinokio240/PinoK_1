@@ -8002,14 +8002,13 @@ class VKApiClient(
      * типа `doc{ownerId}_{id}` — документ до 200 МБ, без ограничения на длину.
      *
      * Этот helper оркестрирует весь flow:
-     *  1. Копирует content:// URI → временный File в cacheDir (upload-сервер
-     *     принимает multipart только из файла, не из потока).
+     *  1. Стриминговый multipart POST из Uri (UriStreamRequestBody, #UPLOAD-STREAM —
+     *     по мотивам Fenrir; temp-файл в cacheDir не создаётся).
      *  2. `docs.getMessagesUploadServer(type="doc")` → upload_url
-     *     (через существующий [uploadDocForMessage]).
+     *     (через [uploadDocForMessageUri]).
      *  3. multipart POST файла → `{file: "..."}`
      *  4. `docs.save(file, title)` → `{ownerId, id, accessKey}`
      *  5. `messages.send(peer_id, attachment="doc{ownerId}_{id}", message=caption)`
-     *  6. Удаляет временный файл.
      *
      * Аналогично [uploadAndSendPhoto], но для документов. Используется из
      * системного share-sheet (ShareToChatSheet) и может быть вызван с любым
@@ -8023,49 +8022,25 @@ class VKApiClient(
      * @return true если сообщение с документом отправлено
      */
     suspend fun uploadAndSendDoc(peerId: Long, uri: Uri, mimeType: String? = null, message: String = ""): Boolean {
-        // Шаг 1: копируем Uri → временный File. VK upload-сервер требует файл.
-        val tempFile = withContext(Dispatchers.IO) {
-            try {
-                val resolver = context.contentResolver
-                val inputStream = resolver.openInputStream(uri) ?: run {
-                    AppLog.e("VKApiClient", "uploadAndSendDoc: cannot open input stream for $uri")
-                    return@withContext null
-                }
-                // Имя файла: lastPathSegment у content:// часто URL-encoded
-                // (например "primary%3A_logs%2Fpinok_logs_123.txt"). Декодируем.
-                val rawName = uri.lastPathSegment ?: "file"
-                val fileName = try {
-                    java.net.URLDecoder.decode(rawName, "UTF-8")
-                } catch (_: Exception) {
-                    rawName
-                }.takeLast(80) // защита от слишком длинных имён
-                val file = java.io.File(context.cacheDir, "share_${System.currentTimeMillis()}_$fileName")
-                inputStream.use { input ->
-                    file.outputStream().use { output -> input.copyTo(output) }
-                }
-                AppLog.i("VKApiClient", "uploadAndSendDoc: copied ${file.length()} bytes → ${file.name}")
-                file
-            } catch (e: Exception) {
-                AppLog.e("VKApiClient", "uploadAndSendDoc: copy uri→file error", e)
-                null
-            }
-        } ?: return false
+        // #UPLOAD-STREAM: файл идёт в сеть СТРИМИНГОМ из Uri (UriStreamRequestBody,
+        // по мотивам Fenrir) — temp-копия в cacheDir больше не создаётся.
+        // Имя: lastPathSegment у content:// часто URL-encoded — декодируем.
+        val rawName = uri.lastPathSegment ?: "file"
+        val fileName = try {
+            java.net.URLDecoder.decode(rawName, "UTF-8")
+        } catch (_: Exception) {
+            rawName
+        }.takeLast(80) // защита от слишком длинных имён
 
-        try {
-            // Шаги 2-4: docs.getMessagesUploadServer → upload → docs.save.
-            val attachment = uploadDocForMessage(tempFile, mimeType) ?: run {
-                AppLog.e("VKApiClient", "uploadAndSendDoc: uploadDocForMessage failed for ${tempFile.name} (mime=$mimeType)")
-                return false
-            }
-            // Шаг 5: messages.send с attachment. Текст-подпись обрезаем под лимит.
-            AppLog.i("VKApiClient", "uploadAndSendDoc: attachment=$attachment, sending to peer=$peerId")
-            val caption = if (message.length > 4000) message.take(4000) else message
-            val result = messagesSend(peerId = peerId, message = caption, attachment = attachment)
-            return result > 0
-        } finally {
-            // Шаг 6: чистим временный файл независимо от результата.
-            tempFile.delete()
+        // docs.getMessagesUploadServer → стриминговый upload → docs.save.
+        val attachment = uploadDocForMessageUri(uri, fileName, mimeType) ?: run {
+            AppLog.e("VKApiClient", "uploadAndSendDoc: uploadDocForMessageUri failed for $fileName (mime=$mimeType)")
+            return false
         }
+        // messages.send с attachment. Текст-подпись обрезаем под лимит.
+        AppLog.i("VKApiClient", "uploadAndSendDoc: attachment=$attachment, sending to peer=$peerId")
+        val caption = if (message.length > 4000) message.take(4000) else message
+        return messagesSend(peerId = peerId, message = caption, attachment = attachment) > 0
     }
 
     /**
@@ -12236,6 +12211,289 @@ class VKApiClient(
         val (ownerId, docId, accessKey) = saved
         return if (accessKey.isNotBlank()) "doc${ownerId}_${docId}_$accessKey"
                else "doc${ownerId}_${docId}"
+    }
+
+    /**
+     * #UPLOAD-STREAM (по мотивам Fenrir DocumentUploadable+ProgressRequestBody):
+     * документ для сообщения прямо из Uri — стриминг через ContentResolver,
+     * никаких temp-копий в cacheDir и полного чтения в память.
+     *
+     * @param uri        content:// / file:// URI файла
+     * @param displayName имя файла для multipart-части и docs.save (title)
+     * @param sizeBytes  размер (OpenableColumns.SIZE); -1 → chunked
+     * @param uploadUrl  заранее полученный docs-сервер (кэш на батч: один
+     *        вызов docs.getMessagesUploadServer на N файлов). null → получить
+     *        самому; если кэшированный сервер отклонил upload — один ретрай
+     *        с свежим url (сервер мог быть одноразовым/протухшим).
+     * @return "doc{ownerId}_{id}[_{accessKey}]" или null
+     */
+    suspend fun uploadDocForMessageUri(
+        uri: Uri,
+        displayName: String,
+        mimeType: String? = null,
+        sizeBytes: Long = -1L,
+        uploadUrl: String? = null,
+        onProgress: ((written: Long, total: Long) -> Unit)? = null,
+    ): String? {
+        if (isOffline()) return null
+        // Whitelist — тот же, что в uploadDocForMessage (Fix #236, §30).
+        val ext = displayName.substringAfterLast('.', "").lowercase()
+        if (ext.isNotEmpty() && ext !in VK_DOC_ALLOWED_EXTENSIONS) {
+            val reason = when {
+                ext in VK_AUDIO_EXTENSIONS -> "аудио-файл — используйте отправку музыки"
+                ext in VK_VIDEO_EXTENSIONS -> "видео-файл — используйте отправку видео"
+                ext in VK_EXECUTABLE_EXTENSIONS -> "исполняемый файл — заблокирован VK"
+                else -> "формат .$ext не поддерживается VK docs"
+            }
+            AppLog.w("VKApiClient", "uploadDocForMessageUri: отклонён $displayName — $reason")
+            return null
+        }
+        val actualMime = mimeType ?: guessMimeType(displayName)
+        // multipart POST на docs-сервер. Поток открывается UriStreamRequestBody
+        // лениво в writeTo — POST стримит файл в сеть, кэш не задействован.
+        suspend fun postToServer(serverUrl: String): Map<String, String>? = withContext(Dispatchers.IO) {
+            try {
+                val requestBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", displayName,
+                        UriStreamRequestBody(context.contentResolver, uri,
+                            actualMime.toMediaType(), sizeBytes, onProgress))
+                    .build()
+                // Fix #154: kittenx (web-upload сервер) отклоняет POST без браузерных
+                // заголовков — HTTP 405. Origin/Referer/Chrome-UA как у vk.com.
+                val req = Request.Builder()
+                    .url(serverUrl)
+                    .header("Origin", VKEndpoints.WEB_ORIGIN)
+                    .header("Referer", VKEndpoints.WEB_REFERER)
+                    .header("User-Agent", VKEndpoints.WEB_BROWSER_UA)
+                    .post(requestBody)
+                    .build()
+                httpClient.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string() ?: return@withContext null
+                    if (!body.trimStart().startsWith("{")) {
+                        AppLog.w("VKApiClient", "uploadDocForMessageUri: non-JSON (${resp.code}): ${body.take(200)}")
+                        return@withContext null
+                    }
+                    val json = try {
+                        JsonParser.parseString(body).asJsonObject
+                    } catch (e: com.google.gson.JsonSyntaxException) {
+                        AppLog.w("VKApiClient", "uploadDocForMessageUri: malformed JSON: ${body.take(200)}")
+                        return@withContext null
+                    }
+                    mapOf(
+                        "file" to (json.get("file")?.asString
+                            ?: return@withContext null),  // Fix #232: fail-fast — пустой file → null, не ""
+                        "size" to (json.get("size")?.asString ?: ""),
+                    )
+                }
+            } catch (e: Exception) {
+                AppLog.e("VKApiClient", "uploadDocForMessageUri upload error", e)
+                null
+            }
+        }
+        val serverUrl = uploadUrl ?: docsGetMessagesUploadServer(type = "doc") ?: return null
+        var uploadResult = postToServer(serverUrl)
+        if (uploadResult == null && uploadUrl != null) {
+            // Кэшированный (батчевый) сервер мог быть одноразовым/протухшим —
+            // один ретрай со свежим upload_url.
+            AppLog.w("VKApiClient", "uploadDocForMessageUri: shared upload_url failed — refetching fresh one")
+            val freshUrl = docsGetMessagesUploadServer(type = "doc") ?: return null
+            uploadResult = postToServer(freshUrl)
+        }
+        if (uploadResult == null) return null
+
+        val saved = docsSave(uploadResult["file"] ?: "", title = displayName) ?: return null
+        val (ownerId, docId, accessKey) = saved
+        return if (accessKey.isNotBlank()) "doc${ownerId}_${docId}_$accessKey"
+               else "doc${ownerId}_${docId}"
+    }
+
+    /**
+     * #UPLOAD-STREAM: multipart загрузка фото СТРИМИНГОМ из Uri
+     * (UriStreamRequestBody вместо readBytes() в память). Ретраи 3× с backoff
+     * 500/1000ms — как в photosUploadWallPhoto(file).
+     */
+    suspend fun photosUploadWallPhotoStream(
+        uploadUrl: String,
+        uri: Uri,
+        mime: String?,
+        sizeBytes: Long,
+        onProgress: ((written: Long, total: Long) -> Unit)? = null,
+    ): UploadedPhoto? {
+        if (isOffline()) return null
+        return withContext(Dispatchers.IO) {
+            val mediaType = (mime ?: "image/jpeg").toMediaType()
+            val ext = when (mime?.lowercase()) {
+                "image/png" -> "png"
+                "image/gif" -> "gif"
+                "image/webp" -> "webp"
+                "image/bmp" -> "bmp"
+                "image/heic", "image/heif" -> "heic"
+                else -> "jpg"
+            }
+            val maxAttempts = 3
+            var lastError: String = "unknown"
+            for (attempt in 1..maxAttempts) {
+                try {
+                    // Тело на КАЖДУЮ попытку: UriStreamRequestBody переоткрывает
+                    // поток в writeTo, поэтому ретрай после частичной отправки корректен.
+                    val body = UriStreamRequestBody(
+                        context.contentResolver, uri, mediaType, sizeBytes, onProgress)
+                    val multipart = MultipartBody.Builder()
+                        .setType(MultipartBody.FORM)
+                        .addFormDataPart("photo", "photo.$ext", body)
+                        .build()
+                    val req = Request.Builder().url(uploadUrl).post(multipart).build()
+                    httpClient.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) {
+                            lastError = "HTTP ${resp.code}"
+                            val clientError = resp.code in 400..499 && resp.code != 408 && resp.code != 429
+                            if (clientError) {
+                                AppLog.e("VKApiClient", "photosUploadWallPhotoStream HTTP ${resp.code} — client error, no retry")
+                                return@withContext null
+                            }
+                            AppLog.w("VKApiClient", "photosUploadWallPhotoStream HTTP ${resp.code} (attempt $attempt/$maxAttempts) — will retry")
+                            return@use
+                        }
+                        val bodyStr = resp.body?.string().orEmpty()
+                        val json = JsonParser.parseString(bodyStr).asJsonObject
+                        val server = json.get("server")?.takeIf { !it.isJsonNull }?.asInt ?: -1
+                        val photo = json.get("photo")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                        val hash = json.get("hash")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                        if (photo.isEmpty() || hash.isEmpty()) {
+                            lastError = "empty photo/hash: $bodyStr"
+                            AppLog.w("VKApiClient", "photosUploadWallPhotoStream: empty photo/hash (attempt $attempt/$maxAttempts) — will retry")
+                            return@use
+                        }
+                        if (attempt > 1) {
+                            AppLog.i("VKApiClient", "photosUploadWallPhotoStream succeeded on attempt $attempt/$maxAttempts")
+                        }
+                        return@withContext UploadedPhoto(server = server, photo = photo, hash = hash)
+                    }
+                } catch (e: java.io.IOException) {
+                    lastError = "IOException: ${e.message}"
+                    AppLog.w("VKApiClient", "photosUploadWallPhotoStream IOException (attempt $attempt/$maxAttempts): ${e.message} — will retry")
+                } catch (e: Exception) {
+                    AppLog.e("VKApiClient", "photosUploadWallPhotoStream failed (attempt $attempt)", e)
+                    lastError = "Exception: ${e.message}"
+                }
+                if (attempt < maxAttempts) {
+                    kotlinx.coroutines.delay(if (attempt == 1) 500L else 1000L)
+                }
+            }
+            AppLog.e("VKApiClient", "photosUploadWallPhotoStream exhausted $maxAttempts retries — $lastError")
+            null
+        }
+    }
+
+    /**
+     * #UPLOAD-STREAM: фото в сообщение прямо из Uri (стриминг, без temp-копии).
+     * photos.getMessagesUploadServer → photosUploadWallPhotoStream →
+     * photos.saveMessagesPhoto. Возвращает "photo{owner}_{id}" или null.
+     */
+    suspend fun uploadPhotoForMessageUri(
+        peerId: Long,
+        uri: Uri,
+        mime: String?,
+        sizeBytes: Long = -1L,
+        onProgress: ((written: Long, total: Long) -> Unit)? = null,
+    ): String? {
+        val uploadUrl = photosGetMessagesUploadServer(peerId) ?: run {
+            AppLog.e("VKApiClient", "uploadPhotoForMessageUri: failed to get upload server for peer=$peerId")
+            return null
+        }
+        val uploaded = photosUploadWallPhotoStream(uploadUrl, uri, mime, sizeBytes, onProgress) ?: run {
+            AppLog.e("VKApiClient", "uploadPhotoForMessageUri: failed to upload $uri")
+            return null
+        }
+        val attachment = photosSaveMessagePhoto(uploaded.server, uploaded.photo, uploaded.hash) ?: run {
+            AppLog.e("VKApiClient", "uploadPhotoForMessageUri: failed to save photo")
+            return null
+        }
+        AppLog.i("VKApiClient", "uploadPhotoForMessageUri: attachment=$attachment")
+        return attachment
+    }
+
+    /**
+     * #UPLOAD-STREAM: Uri-вариант [uploadAndSendVideo] — video.save →
+     * стриминговый POST upload_url (UriStreamRequestBody + существующий
+     * [ProgressRequestBody] для прогресса) → messages.send. Без temp-копии.
+     */
+    suspend fun uploadAndSendVideoUri(
+        peerId: Long,
+        uri: Uri,
+        displayName: String,
+        sizeBytes: Long = -1L,
+        onProgress: (bytesWritten: Long, totalBytes: Long, fraction: Float) -> Unit = { _, _, _ -> },
+    ): Long {
+        if (isOffline()) return -1L
+        val name = displayName.substringBeforeLast('.')
+        AppLog.i("VKApiClient", "uploadAndSendVideoUri: name=$name size=$sizeBytes peer=$peerId")
+
+        // Шаг 1: video.save → upload_url + video_id + owner_id
+        val saveArgs = mutableMapOf(
+            "name" to name,
+            "is_private" to "1", // обязательно для сообщений
+        )
+        val saveJson = call("video.save", saveArgs) ?: run {
+            AppLog.w("VKApiClient", "uploadAndSendVideoUri: video.save returned null")
+            return -1L
+        }
+        val resp = saveJson.getAsJsonObject("response") ?: run {
+            AppLog.w("VKApiClient", "uploadAndSendVideoUri: video.save no response: $saveJson")
+            return -1L
+        }
+        val uploadUrl = resp.get("upload_url")?.takeIf { !it.isJsonNull }?.asString ?: run {
+            AppLog.w("VKApiClient", "uploadAndSendVideoUri: no upload_url in $resp")
+            return -1L
+        }
+        val videoId = resp.get("video_id")?.takeIf { !it.isJsonNull }?.asLong ?: run {
+            AppLog.w("VKApiClient", "uploadAndSendVideoUri: no video_id in $resp")
+            return -1L
+        }
+        val ownerId = resp.get("owner_id")?.takeIf { !it.isJsonNull }?.asLong
+            ?: exchangeAuthRepository?.userId() ?: 0L
+        AppLog.i("VKApiClient", "uploadAndSendVideoUri: video.save ok ownerId=$ownerId videoId=$videoId uploadUrl=${uploadUrl.take(80)}…")
+
+        // Шаг 2: POST файла на upload_url с прогресс-колбэком (стриминг из Uri)
+        val uploaded = withContext(Dispatchers.IO) {
+            try {
+                val mime = guessMimeType(displayName).ifBlank { "video/mp4" }
+                val baseBody = UriStreamRequestBody(
+                    context.contentResolver, uri, mime.toMediaType(), sizeBytes)
+                val progressBody = ProgressRequestBody(baseBody, onProgress)
+                val multipart = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("video_file", displayName, progressBody)
+                    .build()
+                val req = Request.Builder()
+                    .url(uploadUrl)
+                    .header("Origin", VKEndpoints.WEB_ORIGIN)
+                    .header("Referer", VKEndpoints.WEB_REFERER)
+                    .header("User-Agent", VKEndpoints.WEB_BROWSER_UA)
+                    .post(multipart)
+                    .build()
+                httpClient.newCall(req).execute().use { response ->
+                    val body = response.body?.string()
+                    if (!response.isSuccessful) {
+                        AppLog.w("VKApiClient", "uploadAndSendVideoUri: upload HTTP ${response.code}: ${body?.take(300)}")
+                        return@withContext false
+                    }
+                    // VK upload server обычно возвращает JSON {size:..} или пустой ответ
+                    AppLog.i("VKApiClient", "uploadAndSendVideoUri: upload ok (${body?.length ?: 0} bytes response)")
+                    true
+                }
+            } catch (e: Exception) {
+                AppLog.e("VKApiClient", "uploadAndSendVideoUri: upload exception", e)
+                false
+            }
+        }
+        if (!uploaded) return -1L
+
+        // Шаг 3: отправляем сообщение с attachment="video{ownerId}_{videoId}"
+        val attachment = "video${ownerId}_$videoId"
+        AppLog.i("VKApiClient", "uploadAndSendVideoUri: sending message attachment=$attachment")
+        return sendWithAttachment(peerId, attachment)
     }
 
     /** Отправить сообщение с attachment (doc, photo, wall, etc.). */

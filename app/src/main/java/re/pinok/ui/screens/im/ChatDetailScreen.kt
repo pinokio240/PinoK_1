@@ -1558,8 +1558,11 @@ fun ChatDetailScreen(
         pendingPhotos = combined
     }
     // Fix #235 (multi-file): выбор НЕСКОЛЬКИХ файлов за раз (до 10).
-    // Каждый URI копируется в temp-файл с правильным именем (Fix #232),
-    // оборачивается в PendingFileAttachment и добавляется в pendingFiles.
+    // #UPLOAD-STREAM (по мотивам Fenrir): URI НИКУДА не копируется — только
+    // метаданные (имя/размер/MIME через ContentResolver), сам файл уходит
+    // в сеть стримингом в doSend (UriStreamRequestBody). Раньше каждый URI
+    // целиком копировался в temp-файл кэша → двойное дисковое I/O и «съеденная»
+    // квота кэша на больших файлах.
     // Суммарный лимит — 10 (VK messages.send принимает до 10 attachments).
     val multiFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
@@ -1568,16 +1571,17 @@ fun ChatDetailScreen(
         val newFiles = mutableListOf<PendingFileAttachment>()
         for (uri in uris) {
             try {
-                val inputStream = ctx.contentResolver.openInputStream(uri) ?: run {
-                    AppLog.e("ChatDetailScreen", "filePicker: cannot open input stream for $uri")
-                    continue
-                }
                 var nameFromResolver: String? = null
+                var sizeFromResolver: Long = -1L
                 try {
                     ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                         val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                         if (cursor.moveToFirst() && nameIdx >= 0) {
                             nameFromResolver = cursor.getString(nameIdx)
+                        }
+                        val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) {
+                            sizeFromResolver = cursor.getLong(sizeIdx)
                         }
                     }
                 } catch (_: Exception) { }
@@ -1593,13 +1597,10 @@ fun ChatDetailScreen(
                     || displayName.substringAfterLast('.', "").lowercase() in setOf(
                         "mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "m4v", "3gp", "mpg", "mpeg", "ts", "vob",
                     )
-                val safeTempName = "attach_${System.currentTimeMillis()}_${newFiles.size}_$displayName"
-                val tempFile = File(ctx.cacheDir, safeTempName)
-                tempFile.outputStream().use { out -> inputStream.copyTo(out) }
-                inputStream.close()
                 // Fix #297: для видео генерируем миниатюру первого кадра +
                 // длительность через MediaMetadataRetriever. На ошибку — null
-                // (UI покажет play-icon поверх иконки вложения).
+                // (UI покажет play-icon поверх иконки вложения). Работает
+                // напрямую с Uri — temp-копия не нужна.
                 var thumbPath: String? = null
                 var durationSec = 0L
                 if (isVideo) {
@@ -1629,9 +1630,9 @@ fun ChatDetailScreen(
                 }
                 newFiles += PendingFileAttachment(
                     id = nextPendingFileId(),
-                    file = tempFile,
+                    uri = uri,
                     displayName = displayName,
-                    sizeBytes = tempFile.length(),
+                    sizeBytes = sizeFromResolver,
                     mime = mimeFromResolver,
                     isImage = isImage,
                     isVideo = isVideo,
@@ -1639,7 +1640,7 @@ fun ChatDetailScreen(
                     durationSec = durationSec,
                 )
             } catch (e: Exception) {
-                AppLog.e("ChatDetailScreen", "filePicker: copy uri→file error for $uri", e)
+                AppLog.e("ChatDetailScreen", "filePicker: inspect uri error for $uri", e)
             }
         }
         if (newFiles.isNotEmpty()) {
@@ -1649,8 +1650,8 @@ fun ChatDetailScreen(
         }
     }
     // #IM-EDIT-ATTACH: выбор ОДНОГО файла для добавления при редактировании сообщения.
-    // URI копируется в temp-файл (uploadDocForMessage требует File) и загружается как
-    // документ → токен добавляется в editingAddedAttach. Паттерн = multiFilePickerLauncher,
+    // #UPLOAD-STREAM: загружается как документ стримингом из Uri (без temp-файла)
+    // → токен добавляется в editingAddedAttach. Паттерн = multiFilePickerLauncher,
     // но для одного файла (GetContent) и загрузка сразу (не в pendingFiles).
     val editFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -1659,21 +1660,21 @@ fun ChatDetailScreen(
         scope.launch {
             if (editingAddingFile) return@launch
             editingAddingFile = true
-            var inFile: java.io.File? = null
             try {
-                inFile = kotlin.io.path.createTempFile(
-                    prefix = "edit_attach_",
-                    suffix = ".bin",
-                    directory = ctx.cacheDir.toPath(),
-                ).toFile()
-                val ins = ctx.contentResolver.openInputStream(u)
-                if (ins == null) {
-                    AppLog.w("ChatDetailScreen", "editFilePicker: cannot open stream for $u")
-                    return@launch
-                }
-                ins.use { i -> inFile.outputStream().use { out -> i.copyTo(out) } }
-                val mime = ctx.contentResolver.getType(u)
-                val token = app.apiClient.uploadDocForMessage(inFile, mime)
+                var pickedName: String? = null
+                try {
+                    ctx.contentResolver.query(u, null, null, null, null)?.use { cursor ->
+                        val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (cursor.moveToFirst() && nameIdx >= 0) {
+                            pickedName = cursor.getString(nameIdx)
+                        }
+                    }
+                } catch (_: Exception) { }
+                val pickedMime = ctx.contentResolver.getType(u)
+                val displayName = (pickedName
+                    ?: u.lastPathSegment?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+                    ?: "file").takeLast(80)
+                val token = app.apiClient.uploadDocForMessageUri(u, displayName, pickedMime)
                 if (token != null) {
                     editingAddedAttach = editingAddedAttach + token
                     AppLog.i("ChatDetailScreen", "editFilePicker: uploaded $token")
@@ -1682,8 +1683,6 @@ fun ChatDetailScreen(
                 }
             } catch (e: Exception) {
                 AppLog.e("ChatDetailScreen", "editFilePicker: upload error", e)
-            } finally {
-                inFile?.delete()
             }
         }
     }
@@ -2866,24 +2865,13 @@ fun ChatDetailScreen(
                     // библиотеки) уже готовы как attachment-строки (upload не нужен) —
                     // добавляем в начало списка, дальше дозагружаются фото/файлы с устройства.
                     attachments += vkAtts.map { it.att }
-                    // PHOTO-BATCH: сначала фото — photos-путь (uploadPhotoForMessage).
+                    // PHOTO-BATCH: сначала фото — photos-путь.
+                    // #UPLOAD-STREAM: фото уходит в сеть стримингом прямо из Uri —
+                    // temp-копия send_photo_*.jpg больше не создаётся.
                     for ((photoIdx, p) in photos.withIndex()) {
                         val uri = p.uri
-                        // Копируем URI в temp-файл (photos-сервер multipart требует File).
-                        val inFile = kotlin.io.path.createTempFile(
-                            prefix = "send_photo_",
-                            suffix = ".jpg",
-                            directory = ctx.cacheDir.toPath(),
-                        ).toFile()
                         try {
-                            ctx.contentResolver.openInputStream(uri)?.use { ins ->
-                                inFile.outputStream().use { out -> ins.copyTo(out) }
-                            } ?: run {
-                                AppLog.w("ChatDetailScreen", "batch photo: cannot open stream for $uri — tracked as failed")
-                                failedPhotos += p
-                                continue
-                            }
-                            val att = app.apiClient.uploadPhotoForMessage(peerId, inFile, "image/*")
+                            val att = app.apiClient.uploadPhotoForMessageUri(peerId, uri, "image/*")
                             if (att != null) {
                                 attachments += att
                                 AppLog.i("ChatDetailScreen", "batch photo uploaded: $att")
@@ -2902,8 +2890,6 @@ fun ChatDetailScreen(
                                 AppLog.w("ChatDetailScreen", "batch photo: upload failed for $uri — tracked for restore")
                                 failedPhotos += p
                             }
-                        } finally {
-                            inFile.delete()
                         }
                         // #MULTI-PHOTO-FIX: пауза 300мс между загрузками фото.
                         // VK rate-limit'ит rapid consecutive photos.saveMessagesPhoto —
@@ -2915,23 +2901,41 @@ fun ChatDetailScreen(
                         }
                     }
                     // FILE-BATCH: затем файлы — photos/docs/video-пути.
+                    // #UPLOAD-STREAM (по мотивам Fenrir): docs-сервер запрашиваем
+                    // ОДИН раз на батч (кэш upload_url) — все документы шлются на
+                    // один сервер; если сервер отклонил upload, uploadDocForMessageUri
+                    // сам перезапросит свежий url и повторит. Фото — photos-сервер
+                    // на каждое (rate-limit митигируется 300ms-паузами), видео —
+                    // отдельным сообщением, как и раньше.
                     if (!authFailed) {
+                        val sharedDocUrl = if (pfiles.any { !it.isImage && !it.isVideo }) {
+                            app.apiClient.docsGetMessagesUploadServer(type = "doc")
+                        } else null
                         for (pf in pfiles) {
                             // Fix #297: помечаем файл как «загружается».
                             val att = if (pf.isImage) {
-                                app.apiClient.uploadPhotoForMessage(peerId, pf.file, pf.mime)
+                                app.apiClient.uploadPhotoForMessageUri(peerId, pf.uri, pf.mime, pf.sizeBytes)
                             } else if (pf.isVideo) {
-                                val msgId = app.apiClient.uploadAndSendVideo(
+                                val msgId = app.apiClient.uploadAndSendVideoUri(
                                     peerId = peerId,
-                                    file = pf.file,
+                                    uri = pf.uri,
                                     displayName = pf.displayName,
+                                    sizeBytes = pf.sizeBytes,
                                 ) { _, _, _ -> }
                                 if (msgId > 0) {
                                     AppLog.i("ChatDetailScreen", "video sent as separate message: ${pf.displayName} (msgId=$msgId)")
                                 }
                                 null // видео уже отправлено отдельным сообщением
                             } else {
-                                app.apiClient.uploadDocForMessage(pf.file, pf.mime)
+                                // #UPLOAD-STREAM: стриминг из Uri, upload_url —
+                                // общий на батч (кэш docs-сервера).
+                                app.apiClient.uploadDocForMessageUri(
+                                    uri = pf.uri,
+                                    displayName = pf.displayName,
+                                    mimeType = pf.mime,
+                                    sizeBytes = pf.sizeBytes,
+                                    uploadUrl = sharedDocUrl,
+                                )
                             }
                             if (att != null) {
                                 attachments += att
@@ -2959,7 +2963,7 @@ fun ChatDetailScreen(
                         }
                         if (msgId > 0) {
                             AppLog.i("ChatDetailScreen", "batch sent: ${attachments.size} attachments (msgId=$msgId)")
-                            pfiles.forEach { it.file.delete() }
+                            // #UPLOAD-STREAM: temp-файлов больше нет — чистить нечего.
                             reloadMessages()
                             // #MULTI-PHOTO-FIX: partial success — часть фото не загрузилась.
                             // Раньше они тихо терялись (пользователь видел «отправилось
@@ -4497,9 +4501,8 @@ fun ChatDetailScreen(
                         PendingFilesBar(
                             files = pendingFiles,
                             onRemove = { idx ->
-                                val removed = pendingFiles[idx]
+                                // #UPLOAD-STREAM: temp-файла нет — удаляем только из списка.
                                 pendingFiles = pendingFiles.toMutableList().also { it.removeAt(idx) }
-                                removed.file.delete()
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -12565,7 +12568,9 @@ private class VoicePlaybackController {
  */
 data class PendingFileAttachment(
     val id: Long,
-    val file: java.io.File,
+    // #UPLOAD-STREAM: Uri вместо File — файл больше не копируется в кэш,
+    // уходит в сеть стримингом (UriStreamRequestBody, по мотивам Fenrir).
+    val uri: android.net.Uri,
     val displayName: String,
     val sizeBytes: Long,
     val mime: String?,
@@ -12831,7 +12836,7 @@ private fun PendingFileChip(
                 // Миниатюра для картинок, превью кадра для видео, иконка для остальных.
                 if (file.isImage) {
                     AsyncImage(
-                        model = file.file,
+                        model = file.uri,
                         contentDescription = null,
                         modifier = Modifier
                             .size(40.dp)
