@@ -60,12 +60,15 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.util.AppLog
-import java.io.File
 
-/** Файл, ожидающий отправки в пост (выбран через OpenMultipleDocuments). */
+/**
+ * Файл, ожидающий отправки в пост (выбран через OpenMultipleDocuments).
+ * #UPLOAD-STREAM-UNIFY: Uri вместо temp-копии — файл уходит в сеть стримингом
+ * из ContentResolver (UriStreamRequestBody), cacheDir не задействован.
+ */
 private data class PendingPostFile(
     val id: Long,
-    val file: File,
+    val uri: Uri,
     val displayName: String,
 )
 
@@ -232,8 +235,11 @@ fun CreatePostDialog(
     ) { uri ->
         if (uri != null) pendingVideoUri = uri
     }
-    // #ATTACH-UNIFY: файлы с устройства — до 10 (OpenMultipleDocuments, паттерн
-    // комментария PostDetail Fix #237: URI → temp-файл → upload при публикации).
+    // #ATTACH-UNIFY: файлы с устройства — до 10 (OpenMultipleDocuments).
+    // #UPLOAD-STREAM-UNIFY: URI НИКУДА не копируется — только метаданные (имя
+    // через ContentResolver); файл уходит в сеть стримингом при публикации
+    // (uploadDocForCommentUri). Раньше каждый URI целиком копировался в
+    // temp-файл cacheDir → двойное дисковое I/O и «съеденная» квота кэша.
     val multiFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
@@ -241,7 +247,6 @@ fun CreatePostDialog(
         val newFiles = mutableListOf<PendingPostFile>()
         for (uri in uris) {
             try {
-                val inputStream = ctx.contentResolver.openInputStream(uri) ?: continue
                 var nameFromResolver: String? = null
                 try {
                     ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -254,17 +259,13 @@ fun CreatePostDialog(
                 val rawName = nameFromResolver
                     ?: uri.lastPathSegment?.let { java.net.URLDecoder.decode(it, "UTF-8") }
                     ?: "file"
-                val safeTempName = "post_${System.currentTimeMillis()}_${newFiles.size}_$rawName"
-                val tempFile = File(ctx.cacheDir, safeTempName)
-                tempFile.outputStream().use { out -> inputStream.copyTo(out) }
-                inputStream.close()
                 newFiles += PendingPostFile(
                     id = nextPendingPostFileId(),
-                    file = tempFile,
+                    uri = uri,
                     displayName = rawName,
                 )
             } catch (e: Exception) {
-                AppLog.e("CreatePostDialog", "fileLauncher: copy uri→file error for $uri", e)
+                AppLog.e("CreatePostDialog", "fileLauncher: read metadata error for $uri", e)
             }
         }
         if (newFiles.isNotEmpty()) {
@@ -316,9 +317,11 @@ fun CreatePostDialog(
             }
             attachments += buildVkAttachment("photo", photoOwnerId, photoId)
         }
-        // Файлы с устройства — docs.getWallUploadServer pipeline (uploadDocForComment).
+        // Файлы с устройства — docs.getWallUploadServer pipeline.
+        // #UPLOAD-STREAM-UNIFY: uploadDocForCommentUri — стриминг прямо из Uri,
+        // temp-копий нет (displayName идёт в multipart filename и docs.save title).
         for (pf in pendingFiles) {
-            val att = app.apiClient.uploadDocForComment(pf.file)
+            val att = app.apiClient.uploadDocForCommentUri(pf.uri, pf.displayName)
             if (att == null) {
                 toastLocal("Ошибка загрузки файла: ${pf.displayName}")
                 return
@@ -516,8 +519,9 @@ fun CreatePostDialog(
                         icon = { Icon(Icons.Outlined.Description, contentDescription = null) },
                         label = pf.displayName,
                         onRemove = {
+                            // #UPLOAD-STREAM-UNIFY: чистка temp-файлов не нужна —
+                            // храним только Uri, удалять нечего.
                             pendingFiles = pendingFiles.filterNot { it.id == pf.id }
-                            pf.file.delete()
                         },
                     )
                 }

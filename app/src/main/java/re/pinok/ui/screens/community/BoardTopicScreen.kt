@@ -98,7 +98,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
-import java.io.File
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Attachment
@@ -379,7 +378,9 @@ fun BoardTopicScreen(
     }
 
     // FIX-2 C: мульти-файлы с устройства (OpenMultipleDocuments) — parity с
-    // CreatePostDialog.multiFileLauncher. URI → temp-файл → upload при submit.
+    // CreatePostDialog.multiFileLauncher. #UPLOAD-STREAM-UNIFY: URI НИКУДА не
+    // копируется — только имя через resolver; файл уходит в сеть стримингом
+    // при submit (uploadDocForCommentUri).
     val editTopicDocLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
@@ -387,30 +388,13 @@ fun BoardTopicScreen(
         val newFiles = mutableListOf<PendingTopicFile>()
         for (uri in uris) {
             try {
-                val inputStream = ctx.contentResolver.openInputStream(uri) ?: continue
-                var nameFromResolver: String? = null
-                try {
-                    ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                        val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                        if (cursor.moveToFirst() && nameIdx >= 0) {
-                            nameFromResolver = cursor.getString(nameIdx)
-                        }
-                    }
-                } catch (_: Exception) { }
-                val rawName = nameFromResolver
-                    ?: uri.lastPathSegment?.let { java.net.URLDecoder.decode(it, "UTF-8") }
-                    ?: "file"
-                val safeTempName = "edit_topic_${System.currentTimeMillis()}_${newFiles.size}_$rawName"
-                val tempFile = File(ctx.cacheDir, safeTempName)
-                tempFile.outputStream().use { out -> inputStream.copyTo(out) }
-                inputStream.close()
                 newFiles += PendingTopicFile(
                     id = nextPendingTopicFileId(),
-                    file = tempFile,
-                    displayName = rawName,
+                    uri = uri,
+                    displayName = uriDisplayName(ctx, uri),
                 )
             } catch (e: Exception) {
-                AppLog.e("BoardTopicScreen", "editTopicDocLauncher: copy uri→file error for $uri", e)
+                AppLog.e("BoardTopicScreen", "editTopicDocLauncher: read metadata error for $uri", e)
             }
         }
         if (newFiles.isNotEmpty()) {
@@ -1228,9 +1212,10 @@ fun BoardTopicScreen(
                             icon = { Icon(Icons.Outlined.Description, contentDescription = null) },
                             label = pf.displayName,
                             onRemove = {
+                                // #UPLOAD-STREAM-UNIFY: чистка temp-файлов не нужна —
+                                // храним только Uri, удалять нечего.
                                 editTopicPendingFiles =
                                     editTopicPendingFiles.filterNot { it.id == pf.id }
-                                pf.file.delete()
                             },
                         )
                     }
@@ -1413,39 +1398,27 @@ fun BoardTopicScreen(
                                     for (va in vkAtt) {
                                         attachments += va.att
                                     }
-                                    // 3. Фото с устройства → uploadPhotoForComment (паттерн
+                                    // 3. Фото с устройства → uploadPhotoForCommentUri (паттерн
                                     //    CreatePostDialog.postWithAttachments).
+                                    //    #UPLOAD-STREAM-UNIFY: стриминг прямо из Uri —
+                                    //    temp-копия в cacheDir больше не создаётся.
                                     for (uri in pendingPhotos) {
                                         editTopicUploading = true
-                                        val f = File(ctx.cacheDir,
-                                            "bte_photo_${System.currentTimeMillis()}.jpg")
-                                        try {
-                                            ctx.contentResolver.openInputStream(uri)?.use { ins ->
-                                                f.outputStream().use { out -> ins.copyTo(out) }
-                                            } ?: run {
-                                                Toast.makeText(ctx, "Не удалось прочитать фото",
-                                                    Toast.LENGTH_SHORT).show()
-                                                editTopicUploading = false
-                                                return@launch
-                                            }
-                                            val att = app.apiClient.uploadPhotoForComment(f, "image/*")
-                                            if (att != null) {
-                                                attachments += att
-                                            } else {
-                                                Toast.makeText(ctx, "Не удалось загрузить фото",
-                                                    Toast.LENGTH_SHORT).show()
-                                                editTopicUploading = false
-                                                return@launch
-                                            }
-                                        } finally {
-                                            f.delete()
+                                        val att = app.apiClient.uploadPhotoForCommentUri(uri, "image/*")
+                                        if (att != null) {
+                                            attachments += att
+                                        } else {
+                                            Toast.makeText(ctx, "Не удалось загрузить фото",
+                                                Toast.LENGTH_SHORT).show()
+                                            editTopicUploading = false
+                                            return@launch
                                         }
                                     }
                                     editTopicUploading = false
-                                    // 4. Файлы с устройства → uploadDocForComment (паттерн
+                                    // 4. Файлы с устройства → uploadDocForCommentUri (паттерн
                                     //    CreatePostDialog.postWithAttachments).
                                     for (pf in pendingFiles) {
-                                        val att = app.apiClient.uploadDocForComment(pf.file)
+                                        val att = app.apiClient.uploadDocForCommentUri(pf.uri, pf.displayName)
                                         if (att != null) {
                                             attachments += att
                                         } else {
@@ -1524,8 +1497,8 @@ fun BoardTopicScreen(
                                         displayTitle = t
                                         Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show()
                                         showEditTopicDialog = false
-                                        // Очистка temp-файлов pendingFiles.
-                                        pendingFiles.forEach { it.file.delete() }
+                                        // #UPLOAD-STREAM-UNIFY: чистка temp-файлов не нужна —
+                                        // pendingFiles хранит только Uri.
                                         // Перезагрузить тело темы (attachments изменились).
                                         reloadTrigger++
                                         // Сообщить nav-слою: список тем в CommunityScreen перечитает title.
@@ -1750,16 +1723,39 @@ private data class EditTopicVkPreview(
 /**
  * FIX-2: файл, ожидающий отправки в edit-диалоге (выбран через OpenMultipleDocuments).
  * Паритет с CreatePostDialog.PendingPostFile.
+ * #UPLOAD-STREAM-UNIFY: Uri вместо temp-копии — файл уходит в сеть стримингом
+ * из ContentResolver (UriStreamRequestBody), cacheDir не задействован.
  */
 private data class PendingTopicFile(
     val id: Long,
-    val file: File,
+    val uri: Uri,
     val displayName: String,
 )
 
 /** Генератор уникальных id для [PendingTopicFile]. */
 private val editTopicFileIdCounter = java.util.concurrent.atomic.AtomicLong(0)
 private fun nextPendingTopicFileId(): Long = editTopicFileIdCounter.incrementAndGet()
+
+/**
+ * #UPLOAD-STREAM-UNIFY: имя файла для multipart filename / docs.save title
+ * прямо из Uri — temp-копии больше нет, брать имя у inFile не из чего.
+ * Порядок: DISPLAY_NAME через resolver → декодированный lastPathSegment → "file"
+ * (тот же fallback-паттерн, что был в лаунчерах при temp-копировании).
+ */
+private fun uriDisplayName(ctx: android.content.Context, uri: Uri): String {
+    var nameFromResolver: String? = null
+    try {
+        ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (cursor.moveToFirst() && nameIdx >= 0) {
+                nameFromResolver = cursor.getString(nameIdx)
+            }
+        }
+    } catch (_: Exception) { }
+    return nameFromResolver
+        ?: uri.lastPathSegment?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+        ?: "file"
+}
 
 /**
  * FIX-2 A: конвертация существующего [Attachment] (из topicBody.attachments) в
@@ -2655,49 +2651,29 @@ private fun ComposerRow(
                     onSendingChange(true)
                     scope.launch {
                         try {
-                            // Upload photos → "photo{ownerId}_{id}" (uploadPhotoForComment,
+                            // Upload photos → "photo{ownerId}_{id}" (uploadPhotoForCommentUri,
                             // wall-photo pipeline: getWallUploadServer → upload → saveWallPhoto).
+                            // #UPLOAD-STREAM-UNIFY: стриминг прямо из Uri —
+                            // копия в temp-файл и finally-delete больше не нужны.
                             val photoAttachments = mutableListOf<String>()
                             if (photosCopy.isNotEmpty()) {
                                 onUploadingChange(true)
                                 for (uri in photosCopy) {
-                                    val inFile = kotlin.io.path.createTempFile(
-                                        prefix = "board_photo_",
-                                        suffix = ".jpg",
-                                        directory = ctx.cacheDir.toPath(),
-                                    ).toFile()
-                                    try {
-                                        ctx.contentResolver.openInputStream(uri)?.use { ins ->
-                                            inFile.outputStream().use { out -> ins.copyTo(out) }
-                                        } ?: continue
-                                        val att = app.apiClient.uploadPhotoForComment(inFile, "image/*")
-                                        if (att != null) photoAttachments += att
-                                    } finally {
-                                        inFile.delete()
-                                    }
+                                    val att = app.apiClient.uploadPhotoForCommentUri(uri, "image/*")
+                                    if (att != null) photoAttachments += att
                                 }
                                 onUploadingChange(false)
                             }
-                            // Upload files → "doc{ownerId}_{id}" (uploadDocForComment,
-                            // docs.getWallUploadServer → upload).
+                            // Upload files → "doc{ownerId}_{id}" (uploadDocForCommentUri,
+                            // docs.getWallUploadServer → upload). Имя читаем через resolver
+                            // (раньше было inFile.name от temp-копии).
                             val fileAttachments = mutableListOf<String>()
                             if (filesCopy.isNotEmpty()) {
                                 onUploadingChange(true)
                                 for (uri in filesCopy) {
-                                    val inFile = kotlin.io.path.createTempFile(
-                                        prefix = "board_doc_",
-                                        suffix = ".bin",
-                                        directory = ctx.cacheDir.toPath(),
-                                    ).toFile()
-                                    try {
-                                        ctx.contentResolver.openInputStream(uri)?.use { ins ->
-                                            inFile.outputStream().use { out -> ins.copyTo(out) }
-                                        } ?: continue
-                                        val att = app.apiClient.uploadDocForComment(inFile)
-                                        if (att != null) fileAttachments += att
-                                    } finally {
-                                        inFile.delete()
-                                    }
+                                    val att = app.apiClient.uploadDocForCommentUri(
+                                        uri, uriDisplayName(ctx, uri))
+                                    if (att != null) fileAttachments += att
                                 }
                                 onUploadingChange(false)
                             }

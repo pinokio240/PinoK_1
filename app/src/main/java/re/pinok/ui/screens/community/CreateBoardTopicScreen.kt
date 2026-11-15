@@ -46,7 +46,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import java.io.File
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.ui.components.AttachmentPickerSheet
@@ -115,8 +114,10 @@ fun CreateBoardTopicScreen(
     var vkAttachmentLabel by remember { mutableStateOf<String?>(null) }
     var uploading by remember { mutableStateOf(false) }
 
-    // Фото с устройства: PickVisualMedia(ImageOnly) → temp-файл → uploadPhotoForComment
+    // Фото с устройства: PickVisualMedia(ImageOnly) → uploadPhotoForCommentUri
     // → "photo{ownerId}_{id}" attachment-строка (паттерн из PostDetailScreen L1167).
+    // #UPLOAD-STREAM-UNIFY: стриминг прямо из Uri — temp-копия в cacheDir больше
+    // не создаётся — копирование в temp-файл и inFile?.delete() убраны.
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
@@ -127,18 +128,8 @@ fun CreateBoardTopicScreen(
                 return@launch
             }
             uploading = true
-            var inFile: File? = null
             try {
-                val f = kotlin.io.path.createTempFile(
-                    prefix = "btp_photo_",
-                    suffix = ".jpg",
-                    directory = ctx.cacheDir.toPath(),
-                ).toFile()
-                inFile = f
-                ctx.contentResolver.openInputStream(uri)?.use { ins ->
-                    f.outputStream().use { out -> ins.copyTo(out) }
-                } ?: return@launch
-                val att = a.apiClient.uploadPhotoForComment(f, "image/*")
+                val att = a.apiClient.uploadPhotoForCommentUri(uri, "image/*")
                 if (att != null) {
                     vkAttachmentString = att
                     vkAttachmentLabel = "Фото"
@@ -149,14 +140,15 @@ fun CreateBoardTopicScreen(
             } catch (e: Exception) {
                 Toast.makeText(ctx, "Ошибка загрузки: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
-                inFile?.delete()
                 uploading = false
             }
         }
     }
 
-    // Файл с устройства: OpenDocument(*) → temp-файл → uploadDocForComment
+    // Файл с устройства: OpenDocument(*) → uploadDocForCommentUri
     // → "doc{ownerId}_{id}" attachment-строка (паттерн из PostDetailScreen L1186).
+    // #UPLOAD-STREAM-UNIFY: стриминг прямо из Uri, temp-копии нет; displayName
+    // читается через DISPLAY_NAME (идёт в multipart filename и docs.save title).
     val docPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -167,7 +159,6 @@ fun CreateBoardTopicScreen(
                 return@launch
             }
             uploading = true
-            var tempFile: File? = null
             try {
                 var nameFromResolver: String? = null
                 try {
@@ -183,12 +174,7 @@ fun CreateBoardTopicScreen(
                     ?: "file"
                 val displayName = rawName.replace(Regex("[^a-zA-Z0-9._\\- а-яА-ЯёЁ()\\[\\]]"), "_")
                     .ifBlank { "file_${System.currentTimeMillis()}" }
-                val f = File(ctx.cacheDir, "btp_doc_${System.currentTimeMillis()}_$displayName")
-                tempFile = f
-                ctx.contentResolver.openInputStream(uri)?.use { ins ->
-                    f.outputStream().use { out -> ins.copyTo(out) }
-                } ?: return@launch
-                val att = a.apiClient.uploadDocForComment(f)
+                val att = a.apiClient.uploadDocForCommentUri(uri, displayName)
                 if (att != null) {
                     vkAttachmentString = att
                     vkAttachmentLabel = "Документ: $displayName"
@@ -199,7 +185,6 @@ fun CreateBoardTopicScreen(
             } catch (e: Exception) {
                 Toast.makeText(ctx, "Ошибка загрузки: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
-                tempFile?.delete()
                 uploading = false
             }
         }

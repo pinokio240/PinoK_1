@@ -81,7 +81,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
 import coil3.compose.AsyncImage
@@ -122,13 +121,37 @@ fun Music2Screen(
     val context = androidx.compose.ui.platform.LocalContext.current
 
     // P0.36: загрузка файла на upload URL (multipart POST, как VK web HAR).
-    suspend fun uploadAudioFile(uploadUrl: String, file: java.io.File): String? {
+    // #UPLOAD-STREAM-UNIFY: Uri-версия uploadAudioFile — стриминг через
+    // UriStreamRequestBody: temp-копия в cacheDir и чтение в память не нужны;
+    // часть-имя "file" и заголовки Origin/Referer/User-Agent сохранены.
+    suspend fun uploadAudioFileUri(uploadUrl: String, uri: Uri): String? {
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             try {
+                // Метаданные одним query: DISPLAY_NAME (multipart filename —
+                // раньше был filename temp-копии) + SIZE (для Content-Length;
+                // -1 → OkHttp уйдёт chunked transfer-encoding).
+                var nameFromResolver: String? = null
+                var sizeBytes = -1L
+                try {
+                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                            if (nameIdx >= 0) nameFromResolver = cursor.getString(nameIdx)
+                            val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                            if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) {
+                                sizeBytes = cursor.getLong(sizeIdx)
+                            }
+                        }
+                    }
+                } catch (_: Exception) { }
+                val displayName = nameFromResolver
+                    ?: java.net.URLDecoder.decode(uri.lastPathSegment ?: "audio.mp3", "UTF-8")
+                val mime = context.contentResolver.getType(uri) ?: "audio/mpeg"
                 val requestBody = okhttp3.MultipartBody.Builder()
                     .setType(okhttp3.MultipartBody.FORM)
-                    .addFormDataPart("file", file.name,
-                        file.asRequestBody("audio/mpeg".toMediaType()))
+                    .addFormDataPart("file", displayName,
+                        re.pinok.api.UriStreamRequestBody(
+                            context.contentResolver, uri, mime.toMediaType(), sizeBytes))
                     .build()
                 val req = okhttp3.Request.Builder()
                     .url(uploadUrl)
@@ -141,7 +164,7 @@ fun Music2Screen(
                     resp.body?.string()
                 }
             } catch (e: Exception) {
-                AppLog.e("Music2", "uploadAudioFile error: ${e.message}", e)
+                AppLog.e("Music2", "uploadAudioFileUri error: ${e.message}", e)
                 null
             }
         }
@@ -245,19 +268,14 @@ fun Music2Screen(
         scope.launch {
             uploading = true
             try {
-                val tempFile = java.io.File(context.cacheDir, "upload_audio_${System.currentTimeMillis()}.mp3")
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    tempFile.outputStream().use { output -> input.copyTo(output) }
-                } ?: run {
-                    Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
+                // #UPLOAD-STREAM-UNIFY: стриминг прямо из Uri — temp-копия
+                // upload_audio_*.mp3 и tempFile.delete() больше не нужны.
                 val uploadUrl = app.apiClient.audioGetUploadServer()
                 if (uploadUrl.isNullOrBlank()) {
                     Toast.makeText(context, "Не удалось получить URL загрузки", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
-                val uploadResponse = uploadAudioFile(uploadUrl, tempFile)
+                val uploadResponse = uploadAudioFileUri(uploadUrl, uri)
                 if (uploadResponse.isNullOrBlank()) {
                     Toast.makeText(context, "Загрузка файла не удалась", Toast.LENGTH_SHORT).show()
                     return@launch
@@ -269,7 +287,6 @@ fun Music2Screen(
                 } else {
                     Toast.makeText(context, "Не удалось сохранить трек", Toast.LENGTH_SHORT).show()
                 }
-                tempFile.delete()
             } catch (e: Exception) {
                 AppLog.e("Music2", "upload error: ${e.message}", e)
                 Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()

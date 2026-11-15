@@ -8049,19 +8049,22 @@ class VKApiClient(
      *
      * Читает файл из [uri] через ContentResolver, определяет MIME-тип.
      * Возвращает `UploadedPhoto(server, photo, hash)` или null при ошибке.
+     *
+     * #UPLOAD-STREAM-UNIFY: стриминг через UriStreamRequestBody, без readBytes().
      */
     suspend fun photosUploadWallPhoto(uploadUrl: String, uri: Uri): UploadedPhoto? {
         if (isOffline()) return null
         return withContext(Dispatchers.IO) {
             try {
                 val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: run {
-                        AppLog.e("VKApiClient", "photosUploadWallPhoto: cannot open input stream for $uri")
-                        return@withContext null
-                    }
-                val mediaType = mimeType.toMediaType()
-                val requestBody = bytes.toRequestBody(mediaType)
+                // #UPLOAD-STREAM-UNIFY: тело запроса — UriStreamRequestBody, поток
+                // открывается лениво в writeTo; файл НЕ читается в память целиком.
+                val requestBody = UriStreamRequestBody(
+                    context.contentResolver,
+                    uri,
+                    mimeType.toMediaType(),
+                    queryUriSizeBytes(uri),
+                )
                 val multipart = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("photo", "photo.jpg", requestBody)
@@ -12609,18 +12612,181 @@ class VKApiClient(
                else "doc${ownerId}_${docId}"
     }
 
+    /**
+     * #UPLOAD-STREAM-UNIFY: Uri-вариант [uploadPhotoForComment], стриминг без
+     * cacheDir-копии; File-версия осталась для легаси-вызовов.
+     *
+     * Wall-photo pipeline для фото в комментарии к посту (тот же, что в
+     * File-версии): photos.getWallUploadServer → photosUploadWallPhotoStream
+     * (UriStreamRequestBody, ретраи 3×) → photos.saveWallPhoto →
+     * "photo{ownerId}_{id}".
+     *
+     * @param uri       content:// / file:// URI изображения
+     * @param mimeType  MIME (null → ContentResolver.getType; и там null →
+     *                  image/jpeg внутри photosUploadWallPhotoStream)
+     * @param sizeBytes размер (OpenableColumns.SIZE); <=0 → запрос
+     *                  [queryUriSizeBytes], -1 после него → chunked
+     * @return "photo{ownerId}_{id}" или null при ошибке
+     */
+    suspend fun uploadPhotoForCommentUri(
+        uri: Uri,
+        mimeType: String? = null,
+        sizeBytes: Long = -1L,
+    ): String? {
+        if (isOffline()) return null
+        val uploadUrl = photosGetWallUploadServer(groupId = null) ?: run {
+            AppLog.e("VKApiClient", "uploadPhotoForCommentUri: failed to get wall upload server")
+            return null
+        }
+        val uploaded = photosUploadWallPhotoStream(
+            uploadUrl = uploadUrl,
+            uri = uri,
+            mime = mimeType ?: context.contentResolver.getType(uri),
+            sizeBytes = if (sizeBytes > 0) sizeBytes else queryUriSizeBytes(uri),
+        ) ?: run {
+            AppLog.e("VKApiClient", "uploadPhotoForCommentUri: failed to upload")
+            return null
+        }
+        val (photoId, photoOwnerId) = photosSaveWallPhoto(
+            server = uploaded.server,
+            photo = uploaded.photo,
+            hash = uploaded.hash,
+        )
+        if (photoId <= 0L || photoOwnerId <= 0L) {
+            AppLog.e("VKApiClient", "uploadPhotoForCommentUri: photosSaveWallPhoto failed")
+            return null
+        }
+        val attachment = "photo${photoOwnerId}_${photoId}"
+        AppLog.i("VKApiClient", "uploadPhotoForCommentUri: attachment=$attachment")
+        return attachment
+    }
+
+    /**
+     * #UPLOAD-STREAM-UNIFY: Uri-вариант [uploadDocForComment], стриминг без
+     * cacheDir-копии; File-версия осталась для легаси-вызовов.
+     *
+     * docs.getWallUploadServer → multipart POST (UriStreamRequestBody) → docs.save.
+     * Имя multipart-части и title docs.save = [displayName] — VK берёт имя/тип
+     * документа из него, поэтому параметр обязателен (у Uri нет file.name).
+     * Заголовки Origin/Referer/User-Agent — Fix #154 (wall-comment doc upload).
+     *
+     * @param uri        content:// / file:// URI файла
+     * @param displayName имя файла для multipart-части и docs.save (title)
+     * @param mimeType   MIME (null → [guessMimeTypeFromUri])
+     * @param sizeBytes  размер (OpenableColumns.SIZE); -1 → chunked
+     * @return "doc{ownerId}_{id}_{accessKey}" или null
+     */
+    suspend fun uploadDocForCommentUri(
+        uri: Uri,
+        displayName: String,
+        mimeType: String? = null,
+        sizeBytes: Long = -1L,
+    ): String? {
+        if (isOffline()) return null
+        // docs.getWallUploadServer — для документов на стенах/в комментариях.
+        val args = mapOf("type" to "doc")
+        val json = call("docs.getWallUploadServer", args) ?: return null
+        val uploadUrl = try {
+            json.getAsJsonObject("response")?.get("upload_url")
+                ?.takeIf { !it.isJsonNull }?.asString
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "docs.getWallUploadServer error", e)
+            null
+        } ?: return null
+
+        val actualMime = mimeType ?: guessMimeTypeFromUri(uri)
+        // multipart POST на wall-docs сервер. Поток открывается UriStreamRequestBody
+        // лениво в writeTo — файл не копируется в cacheDir и не читается в память.
+        val uploadResult = withContext(Dispatchers.IO) {
+            try {
+                val requestBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", displayName,
+                        UriStreamRequestBody(context.contentResolver, uri,
+                            actualMime.toMediaType(), sizeBytes))
+                    .build()
+                // Fix #154: те же браузерные заголовки для wall-comment doc upload.
+                val req = Request.Builder()
+                    .url(uploadUrl)
+                    .header("Origin", VKEndpoints.WEB_ORIGIN)
+                    .header("Referer", VKEndpoints.WEB_REFERER)
+                    .header("User-Agent", VKEndpoints.WEB_BROWSER_UA)
+                    .post(requestBody)
+                    .build()
+                httpClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string() ?: return@withContext null
+                val parsed = JsonParser.parseString(body).asJsonObject
+                mapOf(
+                    "file" to (parsed.get("file")?.asString
+                        ?: return@withContext null),  // Fix #232: fail-fast — пустой file → null, не ""
+                    "size" to (parsed.get("size")?.asString ?: ""),
+                )
+                }
+            } catch (e: Exception) {
+                AppLog.e("VKApiClient", "uploadDocForCommentUri upload error", e)
+                null
+            }
+        } ?: return null
+
+        val saved = docsSave(uploadResult["file"] ?: "", title = displayName) ?: return null
+        val (ownerId, docId, accessKey) = saved
+        return if (accessKey.isNotBlank()) "doc${ownerId}_${docId}_$accessKey"
+               else "doc${ownerId}_${docId}"
+    }
+
     /** Упрощённый MIME-type гесс по расширению файла. */
-    private fun guessMimeType(filename: String): String = when {
-        filename.endsWith(".jpg", true) || filename.endsWith(".jpeg", true) -> "image/jpeg"
-        filename.endsWith(".png", true) -> "image/png"
-        filename.endsWith(".gif", true) -> "image/gif"
-        filename.endsWith(".webp", true) -> "image/webp"
-        filename.endsWith(".mp4", true) -> "video/mp4"
-        filename.endsWith(".mp3", true) -> "audio/mpeg"
-        filename.endsWith(".pdf", true) -> "application/pdf"
-        filename.endsWith(".doc", true) -> "application/msword"
-        filename.endsWith(".docx", true) -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    private fun guessMimeType(filename: String): String =
+        guessMimeTypeFromExtension(filename)
+
+    /**
+     * #UPLOAD-STREAM-UNIFY: общий MIME-гесс по расширению имени — вынесен из
+     * [guessMimeType], чтобы делиться с Uri-вариантами (guessMimeTypeFromUri)
+     * без дублирования when по расширениям.
+     */
+    private fun guessMimeTypeFromExtension(name: String): String = when {
+        name.endsWith(".jpg", true) || name.endsWith(".jpeg", true) -> "image/jpeg"
+        name.endsWith(".png", true) -> "image/png"
+        name.endsWith(".gif", true) -> "image/gif"
+        name.endsWith(".webp", true) -> "image/webp"
+        name.endsWith(".mp4", true) -> "video/mp4"
+        name.endsWith(".mp3", true) -> "audio/mpeg"
+        name.endsWith(".pdf", true) -> "application/pdf"
+        name.endsWith(".doc", true) -> "application/msword"
+        name.endsWith(".docx", true) -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         else -> "application/octet-stream"
+    }
+
+    /**
+     * #UPLOAD-STREAM-UNIFY: MIME-гесс для Uri (у Uri нет file.name).
+     * Порядок: ContentResolver.getType → расширение из декодированного
+     * lastPathSegment ([guessMimeTypeFromExtension]) → [fallback] →
+     * application/octet-stream.
+     */
+    private fun guessMimeTypeFromUri(uri: Uri, fallback: String? = null): String {
+        context.contentResolver.getType(uri)?.let { return it }
+        val raw = uri.lastPathSegment ?: return fallback ?: "application/octet-stream"
+        val name = try {
+            java.net.URLDecoder.decode(raw, "UTF-8")
+        } catch (_: Exception) {
+            raw
+        }
+        return guessMimeTypeFromExtension(name)
+    }
+
+    /**
+     * #UPLOAD-STREAM-UNIFY: размер файла по Uri через OpenableColumns.SIZE.
+     * -1 → провайдер не ответил (колонки нет / query упал) — UriStreamRequestBody
+     * тогда уходит chunked transfer-encoding (OkHttp contentLength=-1).
+     */
+    private fun queryUriSizeBytes(uri: Uri): Long {
+        var sizeBytes = -1L
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) sizeBytes = c.getLong(idx)
+            }
+        } catch (_: Exception) { }
+        return sizeBytes
     }
 
     /**
@@ -23886,15 +24052,17 @@ class VKApiClient(
         if (isOffline()) return false
         return withContext(Dispatchers.IO) {
             try {
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: run {
-                        AppLog.e("VKApiClient", "videoUploadFile: cannot open input stream for $uri")
-                        return@withContext false
-                    }
+                // #UPLOAD-STREAM-UNIFY: стриминг через UriStreamRequestBody — видео
+                // (сотни МБ) больше не читается в память целиком (readBytes → OOM-риск).
+                // Поток переоткрывается в writeTo, temp-копий нет.
+                val requestBody = UriStreamRequestBody(
+                    context.contentResolver,
+                    uri,
+                    "video/mp4".toMediaType(),
+                    queryUriSizeBytes(uri),
+                )
                 // VK принимает видео как "video_file" в multipart/form-data.
                 // Content-Type по умолчанию video/mp4 — OK для clips.
-                val mediaType = "video/mp4".toMediaType()
-                val requestBody = bytes.toRequestBody(mediaType)
                 val multipart = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("video_file", "clip.mp4", requestBody)

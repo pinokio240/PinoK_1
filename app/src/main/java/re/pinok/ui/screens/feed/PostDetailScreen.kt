@@ -92,7 +92,6 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
-import java.io.File
 import re.pinok.SovaApp
 import re.pinok.data.model.Comment
 import re.pinok.data.model.Post
@@ -215,7 +214,8 @@ fun PostDetailScreen(
     var pendingCommentPhotos by remember { mutableStateOf<List<PendingPhoto>>(emptyList()) }
     var previewPhotoIndex by remember { mutableStateOf<Int?>(null) }
     // Fix #237 (multi-file в комментариях): список выбранных файлов (до 10),
-    // как в чате. Каждый файл — PendingCommentFile(id, file, name, size, mime).
+    // как в чате. Каждый файл — PendingCommentFile(id, uri, name, size, mime).
+    // #UPLOAD-STREAM-UNIFY: uri вместо temp-копии (см. data class).
     var pendingCommentFiles by remember { mutableStateOf<List<PendingCommentFile>>(emptyList()) }
     // Fix #237 (emoji-панель): вставка эмодзи в текст комментария.
     var showEmojiPanel by remember { mutableStateOf(false) }
@@ -254,8 +254,9 @@ fun PostDetailScreen(
         pendingCommentPhotos = combined
     }
     // Fix #237 (multi-file): выбор НЕСКОЛЬКИХ файлов за раз (до 10), как в чате.
-    // Каждый URI копируется в temp-файл, оборачивается в PendingCommentFile и
-    // добавляется в pendingCommentFiles. Загрузка на сервер — в doSend (batch).
+    // #UPLOAD-STREAM-UNIFY: каждый URI хранится как есть (без temp-копии) —
+    // метаданные (имя/размер/MIME) читаются через ContentResolver, файл уходит
+    // в сеть стримингом в doSend (uploadPhotoForCommentUri / uploadDocForCommentUri).
     // Раньше был одиночный OpenDocument + немедленная загрузка одного файла в
     // attachmentString — нельзя было прикрепить 2+ файла к комментарию.
     val commentMultiFileLauncher = rememberLauncherForActivityResult(
@@ -265,16 +266,19 @@ fun PostDetailScreen(
         val newFiles = mutableListOf<PendingCommentFile>()
         for (uri in uris) {
             try {
-                val inputStream = ctx.contentResolver.openInputStream(uri) ?: run {
-                    AppLog.e("PostDetail", "comment filePicker: cannot open input stream for $uri")
-                    continue
-                }
                 var nameFromResolver: String? = null
+                var sizeFromResolver: Long = -1L
                 try {
                     ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                         val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                         if (cursor.moveToFirst() && nameIdx >= 0) {
                             nameFromResolver = cursor.getString(nameIdx)
+                        }
+                        // #UPLOAD-STREAM-UNIFY: размер из SIZE (раньше был tempFile.length());
+                        // -1 → UriStreamRequestBody уйдёт chunked transfer-encoding.
+                        val sizeIdx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) {
+                            sizeFromResolver = cursor.getLong(sizeIdx)
                         }
                     }
                 } catch (_: Exception) { }
@@ -285,20 +289,16 @@ fun PostDetailScreen(
                 val displayName = rawName.replace(Regex("[^a-zA-Z0-9._\\- а-яА-ЯёЁ()\\[\\]]"), "_")
                     .ifBlank { "file_${System.currentTimeMillis()}" }
                 val isImage = mimeFromResolver?.startsWith("image/") == true
-                val safeTempName = "cmt_${System.currentTimeMillis()}_${newFiles.size}_$displayName"
-                val tempFile = File(ctx.cacheDir, safeTempName)
-                tempFile.outputStream().use { out -> inputStream.copyTo(out) }
-                inputStream.close()
                 newFiles += PendingCommentFile(
                     id = nextPendingCommentFileId(),
-                    file = tempFile,
+                    uri = uri,
                     displayName = displayName,
-                    sizeBytes = tempFile.length(),
+                    sizeBytes = sizeFromResolver,
                     mime = mimeFromResolver,
                     isImage = isImage,
                 )
             } catch (e: Exception) {
-                AppLog.e("PostDetail", "comment filePicker: copy uri→file error for $uri", e)
+                AppLog.e("PostDetail", "comment filePicker: read metadata error for $uri", e)
             }
         }
         if (newFiles.isNotEmpty()) {
@@ -1192,35 +1192,28 @@ fun PostDetailScreen(
                                 uploading = true
                                 for (p in photosToSend) {
                                     val uri = p.uri
-                                    val inFile = kotlin.io.path.createTempFile(
-                                        prefix = "pdc_photo_",
-                                        suffix = ".jpg",
-                                        directory = ctx.cacheDir.toPath(),
-                                    ).toFile()
-                                    try {
-                                        ctx.contentResolver.openInputStream(uri)?.use { ins ->
-                                            inFile.outputStream().use { out -> ins.copyTo(out) }
-                                        } ?: continue
-                                        val att = app.apiClient.uploadPhotoForComment(inFile, "image/*")
-                                        if (att != null) {
-                                            photoAttachments += att
-                                            AppLog.i("PostDetail", "comment photo uploaded: $att")
-                                        }
-                                    } finally {
-                                        inFile.delete()
+                                    // #UPLOAD-STREAM-UNIFY: стриминг прямо из Uri —
+                                    // копия в temp-файл и inFile.delete() больше не нужны.
+                                    val att = app.apiClient.uploadPhotoForCommentUri(uri, "image/*")
+                                    if (att != null) {
+                                        photoAttachments += att
+                                        AppLog.i("PostDetail", "comment photo uploaded: $att")
                                     }
                                 }
                                 uploading = false
                             }
                             // Fix #237 (multi-file): загружаем все выбранные файлы
-                            // через docs.upload (uploadDocForComment). Каждый файл →
-                            // "doc{ownerId}_{id}" строка. temp-файлы удаляются после.
+                            // через docs.upload (uploadDocForCommentUri). Каждый файл →
+                            // "doc{ownerId}_{id}" строка.
+                            // #UPLOAD-STREAM-UNIFY: стриминг из Uri, temp-копий нет —
+                            // finally-блок с pf.file.delete() удалён (удалять нечего).
                             val fileAttachments = mutableListOf<String>()
                             if (filesToSend.isNotEmpty()) {
                                 uploading = true
                                 for (pf in filesToSend) {
                                     try {
-                                        val att = app.apiClient.uploadDocForComment(pf.file)
+                                        val att = app.apiClient.uploadDocForCommentUri(
+                                            pf.uri, pf.displayName, pf.mime, pf.sizeBytes)
                                         if (att != null) {
                                             fileAttachments += att
                                             AppLog.i("PostDetail", "comment file uploaded: $att")
@@ -1229,8 +1222,6 @@ fun PostDetailScreen(
                                         }
                                     } catch (fe: Exception) {
                                         AppLog.e("PostDetail", "comment file upload error: ${pf.displayName}", fe)
-                                    } finally {
-                                        pf.file.delete()
                                     }
                                 }
                                 uploading = false
@@ -2300,10 +2291,13 @@ private fun formatFileSize(bytes: Long): String =
  * Fix #237 (multi-file): данные о выбранном файле, ожидающем отправки в
  * комментарий. Аналог [PendingPhoto] для фото, но для произвольных файлов.
  * id — уникальный стабильный ключ для LazyRow (см. Fix #235).
+ * #UPLOAD-STREAM-UNIFY: uri вместо temp-копии — файл уходит в сеть стримингом
+ * из ContentResolver (UriStreamRequestBody), cacheDir не задействован.
+ * sizeBytes — OpenableColumns.SIZE из пикера; -1 → chunked transfer.
  */
 data class PendingCommentFile(
     val id: Long,
-    val file: File,
+    val uri: Uri,
     val displayName: String,
     val sizeBytes: Long,
     val mime: String?,
@@ -2394,7 +2388,8 @@ private fun CommentFileChip(pf: PendingCommentFile, onRemove: () -> Unit) {
     ) {
         if (pf.isImage) {
             AsyncImage(
-                model = pf.file,
+                // #UPLOAD-STREAM-UNIFY: model = uri — Coil нативно грузит content://.
+                model = pf.uri,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -2418,11 +2413,15 @@ private fun CommentFileChip(pf: PendingCommentFile, onRemove: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = formatFileSize(pf.sizeBytes),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // #UPLOAD-STREAM-UNIFY: sizeBytes может быть -1 (провайдер не отдал
+            // OpenableColumns.SIZE) — тогда строку размера не рисуем, иначе «-1 Б».
+            if (pf.sizeBytes > 0) {
+                Text(
+                    text = formatFileSize(pf.sizeBytes),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         IconButton(
             onClick = onRemove,

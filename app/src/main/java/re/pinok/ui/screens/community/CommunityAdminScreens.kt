@@ -95,8 +95,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import re.pinok.SovaApp
+import re.pinok.api.UriStreamRequestBody
 import re.pinok.api.VKApiClient
 import re.pinok.data.model.Friend
 import re.pinok.data.model.Post
@@ -1586,9 +1586,19 @@ private suspend fun uploadGroupCoverMultipart(
     return withContext(Dispatchers.IO) {
         try {
             val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: return@withContext null
-            val requestBody = bytes.toRequestBody(mime.toMediaType())
+            // #UPLOAD-STREAM-UNIFY: стриминг через UriStreamRequestBody — обложка
+            // больше не читается в память целиком (readBytes() убран).
+            var sizeBytes = -1L
+            try {
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val idx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (idx >= 0 && cursor.moveToFirst() && !cursor.isNull(idx)) {
+                        sizeBytes = cursor.getLong(idx)
+                    }
+                }
+            } catch (_: Exception) { }
+            val requestBody = UriStreamRequestBody(
+                context.contentResolver, uri, mime.toMediaType(), sizeBytes)
             val multipart = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", "cover.jpg", requestBody)

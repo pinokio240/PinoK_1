@@ -156,7 +156,6 @@ import re.pinok.ui.theme.UiScale
 import re.pinok.util.AppLog
 import re.pinok.util.toCountString
 import re.pinok.util.toDurationString
-import java.io.File
 import kotlin.math.roundToInt
 
 /**
@@ -3030,18 +3029,15 @@ private fun CommentsBottomSheet(
         scope.launch {
             uploading = true
             try {
-                val inputStream = ctx.contentResolver.openInputStream(uri) ?: return@launch
-                val file = File(ctx.cacheDir, "comment_photo_${System.currentTimeMillis()}.jpg")
-                file.outputStream().use { out -> inputStream.copyTo(out) }
-                inputStream.close()
-                val attachment = app.apiClient.uploadPhotoForComment(file, "image/*")
+                // #UPLOAD-STREAM-UNIFY: стриминг прямо из Uri — temp-копия в
+                // cacheDir и file.delete() больше не нужны.
+                val attachment = app.apiClient.uploadPhotoForCommentUri(uri, "image/*")
                 if (attachment != null) {
                     attachmentString = attachment
                     attachedFileName = "Фото"
                 } else {
-                    AppLog.w("CommentsBottomSheet", "uploadPhotoForComment returned null")
+                    AppLog.w("CommentsBottomSheet", "uploadPhotoForCommentUri returned null")
                 }
-                file.delete()
             } catch (e: Exception) {
                 AppLog.e("CommentsBottomSheet", "upload photo error", e)
             } finally {
@@ -3089,19 +3085,27 @@ private fun CommentsBottomSheet(
         scope.launch {
             uploading = true
             try {
-                val inputStream = ctx.contentResolver.openInputStream(uri) ?: return@launch
-                val fileName = java.net.URLDecoder.decode(uri.lastPathSegment ?: "file", "UTF-8")
-                val file = File(ctx.cacheDir, "comment_${System.currentTimeMillis()}_$fileName")
-                file.outputStream().use { out -> inputStream.copyTo(out) }
-                inputStream.close()
-                val attachment = app.apiClient.uploadDocForComment(file)
+                // #UPLOAD-STREAM-UNIFY: стриминг прямо из Uri — temp-копии нет.
+                // Имя читаем через DISPLAY_NAME resolver (раньше — декодированный
+                // lastPathSegment temp-файла), fallback — старый паттерн.
+                var nameFromResolver: String? = null
+                try {
+                    ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (cursor.moveToFirst() && nameIdx >= 0) {
+                            nameFromResolver = cursor.getString(nameIdx)
+                        }
+                    }
+                } catch (_: Exception) { }
+                val fileName = nameFromResolver
+                    ?: java.net.URLDecoder.decode(uri.lastPathSegment ?: "file", "UTF-8")
+                val attachment = app.apiClient.uploadDocForCommentUri(uri, fileName)
                 if (attachment != null) {
                     attachmentString = attachment
                     attachedFileName = fileName
                 } else {
-                    AppLog.w("CommentsBottomSheet", "uploadDocForComment returned null for file")
+                    AppLog.w("CommentsBottomSheet", "uploadDocForCommentUri returned null for file")
                 }
-                file.delete()
             } catch (e: Exception) {
                 AppLog.e("CommentsBottomSheet", "upload file error", e)
             } finally {

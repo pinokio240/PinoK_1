@@ -24513,3 +24513,31 @@ Work Log:
 - ФИКС 3 — видео/аудио останавливается при малейшем обрыве сети (#NET-GRACE, 3с/2 пробы). Root causes: (a) SovaApp onLostListener делал httpClient.dispatcher.cancelAll() мгновенно на onLost → рвались in-flight HLS-сегменты ExoPlayer; (b) onDefaultNetworkChangedListener звал onNetworkChanged(forceReprepare=true) → prepare()+seekTo на каждом Wi-Fi↔mobile handover; (c) PlayerConnection.onNetworkChanged ВСЕГДА prepare() независимо от state; (d) BUFFERING-watchdog 9с (docstring врал «30с») force-prepare без проверки сети; (e) нет IO-error retry в onPlayerError; (f) у аудио нет back-buffer. Решение: NetworkObserver.startOfflineGrace — при onLost/onUnavailable с !stillOnline НЕ объявляем offline мгновенно, запускаем 3с grace с 2 TCP-пробами hasRealInternetDeferred(vk.com:443, 1.5с таймаут); если хоть одна проба прошла — остаёмся онлайн (cancelAll НЕ зовётся, плеер НЕ трогается, _isOnline НЕ меняется); если обе упали + 3с истекли → _isOnline=false + onLostListeners; onAvailable отменяет grace. SovaApp: forceReprepare=true→false на default-route switch. PlayerConnection.onNetworkChanged: prepare() только при forceReprepare||STATE_IDLE (не BUFFERING/READY). BUFFERING-watchdog: 9с→15с + pre-prepare probe (skip если оффлайн). onPlayerError: IO-network-error (FAILED/TIMEOUT/UNSPECIFIED) → до 3 retry (1.5с delay + prepare+seekTo) перед error-UI. PlayerService: setBackBuffer(30с) — паритет с VideoPlayerConfig. VideoPlayerScreen: IO-error branch (до 2 retry prepare+seekTo) перед retryWithFreshUrl. Файлы: NetworkObserver.kt, SovaApp.kt (только registerGlobalNetworkWatcher), PlayerConnection.kt, PlayerService.kt, VideoPlayerScreen.kt.
 - Процесс: 3 субагента-исследователя (Explore) параллельно изучили код по каждой проблеме с точными line-numbers и диагнозом; затем 3 субагента-исполнителя (general-purpose) параллельно реализовали фиксы с детальными планами. SovaApp.kt правился двумя агентами в разных секциях (startMessageNotifier ~1896-1975 vs registerGlobalNetworkWatcher ~3279-3308) — конфликтов нет. Главный агент верифицировал: API-совместимость (getOrNull/networkObserver/hasRealInternetDeferred/withController/consecutivePlayerErrors/scope/self/ToggleRow-with-subtitle/setBackBuffer/LocusId/setBypassDnd), баланс скобок, отсутствие конфликтов, чистоту по check-nested-comments.
 - НЕ сделано: сборка gradle (в песочнице нет Android SDK + Maven 429 offline) — синтаксис проверен ручным ревью всех 9 diff'ов. Пользователь должен собрать на машине с Android SDK.
+## 2026-11-15 — #UPLOAD-STREAM-UNIFY: унификация стриминговой загрузки на все места прикрепления
+
+Проблема: #UPLOAD-STREAM (2051a96) покрыл только ChatDetailScreen. Аудит нашёл 11 путей со старым паттерном
+«copy content:// → temp File / readBytes() → upload».
+
+### VKApiClient.kt
+- photosUploadWallPhoto(uploadUrl, uri): readBytes() → UriStreamRequestBody (фото больше не читается в память целиком).
+- videoUploadFile(uploadUrl, uri): readBytes() → UriStreamRequestBody (видео сотни МБ — устранён OOM-риск).
+- Новые Uri-варианты: uploadPhotoForCommentUri(uri, mime, size) — wall-photo pipeline через photosUploadWallPhotoStream;
+  uploadDocForCommentUri(uri, displayName, mime, size) — docs.getWallUploadServer → UriStreamRequestBody → docs.save.
+- Хелперы: queryUriSizeBytes (OpenableColumns.SIZE, -1 → chunked), guessMimeTypeFromUri,
+  guessMimeTypeFromExtension (guessMimeType теперь делегирует — без дубля when).
+- File-версии сохранены (легаси-совместимость).
+
+### UI (temp-копии в cacheDir убраны, Pending* модели хранят Uri)
+- CreatePostDialog: PendingPostFile.file → uri; публикация → uploadDocForCommentUri; pf.file.delete() убраны.
+- PostDetailScreen: PendingCommentFile.file → uri (SIZE из resolver, -1 → chunked); doSend фото/файлы → Uri-варианты;
+  Coil превью model = pf.uri (content:// нативно); чип скрывает строку размера при sizeBytes <= 0 (иначе «-1 Б»).
+- FeedScreen CommentsBottomSheet: uploadCommentPhoto/fileLauncher → Uri-варианты; fileName через DISPLAY_NAME.
+- BoardTopicScreen: PendingTopicFile.file → uri; edit-фото/doc и comment-зона → Uri-варианты; хелпер uriDisplayName().
+- CreateBoardTopicScreen: оба пикера → Uri-варианты.
+- Music2Screen: uploadAudioFile(File) → uploadAudioFileUri(uri) — UriStreamRequestBody, имя+SIZE одним query.
+- EditProfileScreen / CommunityAdminScreens: обложки — readBytes() → UriStreamRequestBody.
+
+### Не тронуто
+SettingsScreen (импорт бэкапа — чтение, не upload); ChatDetailScreen (уже на стриминге); File-версии VKApiClient.
+
+Метрики: 9 файлов, +398/-225. Проверки: check-nested-comments OK, баланс скобок OK.
