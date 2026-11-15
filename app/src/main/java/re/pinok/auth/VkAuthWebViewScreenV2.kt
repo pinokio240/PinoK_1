@@ -748,13 +748,36 @@ fun VkAuthWebViewScreenV2(
                                 // БЕЛЫЙ ЭКРАН + SMS не приходило (flow не доходил до 2FA/phone).
                                 // «Продолжить как [Имя]» есть только на SSO-странице (когда VK
                                 // уже знает сессию с другого устройства) — там autoclick безопасен.
+                                //
+                                // #AUTH-ACTION-B64 (2026-11-15): VK прячем имя flow (no_password_flow /
+                                // password / phone / 2fa) в base64-параметре action= URL. URLDecoder
+                                // декодирует только %XX, НЕ base64 → contains("no_password_flow")
+                                // возвращал false на странице ввода телефона → autoclick срабатывал
+                                // (теперь это не критично — autoclick всё равно не кликает «Войти»,
+                                // но лог был неточный: писал «injected» вместо «SKIPPED»).
+                                // Теперь декодируем action base64 → точная детекция страницы ввода.
                                 val is2faChallengePage = url?.let { u ->
-                                    val decoded = runCatching { java.net.URLDecoder.decode(u, "UTF-8") }
+                                    val urlDecoded = runCatching { java.net.URLDecoder.decode(u, "UTF-8") }
                                         .getOrDefault(u)
-                                    decoded.contains("br=ch") ||
-                                        decoded.contains("challenge") ||
-                                        decoded.contains("no_password_flow") ||
-                                        decoded.contains("2fa")
+                                    // 1) Прямые маркеры в URL (br=ch — после пустого сабмита VK
+                                    //    добавляет &br=ch; «2fa»/«challenge» в пути).
+                                    val directHit = urlDecoded.contains("br=ch") ||
+                                        urlDecoded.contains("challenge") ||
+                                        urlDecoded.contains("no_password_flow") ||
+                                        urlDecoded.contains("2fa")
+                                    // 2) base64-параметр action= — VK кодирует туда JSON с именем flow:
+                                    //    {"name":"no_password_flow","input_type":"phone",...}
+                                    //    Декодируем и ищем маркеры phone/password/2fa/sms/code/challenge.
+                                    val actionHit = decodeVkAuthAction(urlDecoded)?.let { actionJson ->
+                                        actionJson.contains("no_password_flow") ||
+                                            actionJson.contains("password") ||
+                                            actionJson.contains("\"phone\"") ||
+                                            actionJson.contains("2fa") ||
+                                            actionJson.contains("sms") ||
+                                            actionJson.contains("code") ||
+                                            actionJson.contains("challenge")
+                                    } == true
+                                    directHit || actionHit
                                 } == true
                                 if (url?.contains("id.vk.ru/auth") == true && !is2faChallengePage) {
                                     val autoClickJs = """
@@ -1176,6 +1199,42 @@ private fun captureSessionCookies(): SessionCookies {
         remixdmgr = found["remixdmgr"],
         remixmvkFp = found["remixmvk-fp"],
     )
+}
+
+/**
+ * #AUTH-ACTION-B64: извлекает и base64-декодирует параметр `action=` из URL VK ID.
+ *
+ * VK кодирует имя flow в base64-параметр: `id.vk.ru/auth?action=eyJuYW1lIjoibm9fcGFzc3dvcmRfZmxvdyIs...`
+ * где base64 декодируется в `{"name":"no_password_flow","input_type":"phone","params":{...}}`.
+ *
+ * URLDecoder.decode декодирует только %XX-escaping, НЕ base64 → проверка
+ * `contains("no_password_flow")` на URL-декодированной строке возвращала false
+ * на странице ввода телефона → autoclick не распознавал её как challenge.
+ *
+ * @param urlDecoded URL, уже URL-декодированный (%XX → символы).
+ * @return декодированный JSON-строка параметра action, или null если параметра
+ *         нет / base64-декодирование не удалось / результат не похож на JSON.
+ */
+private fun decodeVkAuthAction(urlDecoded: String): String? {
+    // action= идёт до следующего & или конца строки. Значение — base64
+    // (URL-safe: '-'/'_' вместо '+'/'/', с или без padding '=').
+    val actionIdx = urlDecoded.indexOf("action=")
+    if (actionIdx < 0) return null
+    val start = actionIdx + "action=".length
+    val end = urlDecoded.indexOf('&', start).let { if (it < 0) urlDecoded.length else it }
+    if (end <= start) return null
+    val b64 = urlDecoded.substring(start, end)
+    if (b64.isBlank()) return null
+    return try {
+        // URL_SAFE: '-'/'_' вместо '+'/'/'. NO_WRAP: без переносов. NO_PADDING:
+        // терпит отсутствующий '=' padding (VK иногда его не добавляет).
+        val bytes = android.util.Base64.decode(b64, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+        val json = String(bytes, Charsets.UTF_8)
+        // Защита от ложных срабатываний: декодированное должно быть JSON (начинается с '{').
+        if (json.startsWith("{")) json else null
+    } catch (_: Exception) {
+        null
+    }
 }
 
 /**
