@@ -2890,6 +2890,13 @@ fun ChatDetailScreen(
                                 AppLog.w("ChatDetailScreen", "batch photo: upload failed for $uri — tracked for restore")
                                 failedPhotos += p
                             }
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (e: Exception) {
+                            // #MULTI-PHOTO-FIX: исключение из upload (сеть/IO/parse) —
+                            // трекаем как failed, не рвём батч (parity с null-веткой выше).
+                            AppLog.e("ChatDetailScreen", "batch photo: exception for $uri — tracked for restore", e)
+                            failedPhotos += p
                         }
                         // #MULTI-PHOTO-FIX: пауза 300мс между загрузками фото.
                         // VK rate-limit'ит rapid consecutive photos.saveMessagesPhoto —

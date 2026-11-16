@@ -24563,3 +24563,15 @@ uploadAndSendVideoUri). guessMimeTypeFromUri / guessMimeTypeFromExtension — ж
 Проверки: check-nested-comments OK. Brace-balance: delta -1 объяснён строковым
 литералом "{" в удалённой uploadDocForMessage (startsWith("{")) — артефакт
 наивного сканера, реально баланс сохранён (удалены целые сбалансированные функции).
+
+## 2026-11-16 — fix(chat): #TRY-CATCH-FIX — orphaned try{} в photo-batch
+
+Регрессия от 2051a96 (#UPLOAD-STREAM): оригинал имел
+  try { uploadPhotoForMessage(inFile) } finally { inFile.delete() }
+finally чистил temp-файл. Стриминг убрал temp-файл И finally, но try{} и
+его закрывающая } остались сиротами → compile error "Expecting catch or finally"
+(ChatDetailScreen.kt:2893).
+
+Фикс: добавлен catch (CancellationException re-throw + Exception → failedPhotos).
+Завершает #MULTI-PHOTO-FIX: исключения upload (сеть/IO/parse) трекаются как
+failedPhotos, не рвут весь батч — parity с null-веткой. Проверки: nested-comments OK.
