@@ -1,6 +1,14 @@
 {
   "versions": [
     {
+      "versionCode": 231,
+      "versionName": "2.3.1",
+      "stamp": "calls-2026.11.16-2.3.1",
+      "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/2.3.1/Pinok_2_3_1.apk",
+      "sha256": "86dfbe1e1f815c88c5359aa4832bfe3745820b7bcb115681f4439d35a7b5c2f2",
+      "notes": "Стабилизация сети, оптимизация кода, работа над отправкой файлов"
+    },
+    {
       "versionCode": 230,
       "versionName": "2.3.0",
       "stamp": "calls-2026.11.12-2.3.0",

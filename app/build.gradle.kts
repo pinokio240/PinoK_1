@@ -38,12 +38,11 @@ android {
         // #RELEASE-V229-BUMP (2026-11-05): bump 228→229 — уведомления: единая карточка,
         // переход по уведомлению к комментарию (пост/клип), фикс лупа загрузки
         // комментариев (CancellationException при закрытии плеера).
-        // #RELEASE-V230-BUMP (2026-11-12): bump 229→230 — фиксы после 2.2.9:
-        // редактирование комментариев в ленте, приоритет пушей, grace-пауза
-        // сети для воспроизведения, импорт LocusId (androidx.core.app).
-        versionCode = 230
-        versionName = "2.3.0"
-        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-11-12T12:00:00+03:00\"")
+        // #RELEASE-V231-BUMP (2026-11-16): bump 230→231 — стабилизация сети,
+        // оптимизация кода (волны рефакторинга), работа над отправкой файлов.
+        versionCode = 231
+        versionName = "2.3.1"
+        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-11-16T12:00:00+03:00\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
