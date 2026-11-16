@@ -101,6 +101,11 @@ internal fun LandingScreen(
     // Обычная кнопка «Войти через VK» остаётся как была.
     // 2026-10-20: дефолт true — согласован с SovaPrefs (тумблер включён по умолчанию).
     authV2Enabled: Boolean = true,
+    // #AUTH-SWAP (2026-10-21): порядок изменён — «Войти в аккаунт 2» (V2) теперь ПЕРВАЯ
+    // (верхняя), «Войти через VK» (V1) — ВТОРАЯ и скрыта по умолчанию (gate authV1Enabled).
+    // #AUTH-SWAP: видимость «Войти через VK» (default false — кнопка скрыта).
+    // Включается тумблером «Авторизация» в Разработка (SovaPrefs.authV1Enabled).
+    authV1Enabled: Boolean = false,
     onStartAuthV2: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -192,43 +197,11 @@ internal fun LandingScreen(
 
         Spacer(Modifier.height(20.dp))
 
-        // #VKAUTH-V2 #VKID-ONLY Primary CTA — «Войти через VK» (встроенный WebView,
-        // VK ID flow). Грузит m.vk.ru/login?app_id=6287487 → VK ID SDK делает
-        // silent exchange remixsid→web_token (или показывает форму входа VK ID).
-        // Полный cookie capture (9 remix-ключей) → submitWebToken. Path 1.5
-        // silentRefreshViaRemixsid удерживает сессию при смене IP (remixsid +
-        // httoken + remixnsid + p cookie ... в storage). Авторизация ТОЛЬКО через VK ID.
-        Button(
-            onClick = { authAction(onStartWebView) },
-            enabled = !isLoading && !checkingRealNet,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (offline) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                    else MaterialTheme.colorScheme.primary,
-                contentColor = if (offline) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                    else MaterialTheme.colorScheme.onPrimary,
-            ),
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.Login,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text("Войти через VK", style = MaterialTheme.typography.titleMedium)
-        }
-
-        Text(
-            text = "Вход через VK ID. Сессия удерживается при смене сети — " +
-                   "remixsid, p cookie и все cookies сохраняются автоматически.",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            textAlign = TextAlign.Center,
-        )
-
         // #AUTH2 (2026-10-17): дополнительная кнопка «Войти в аккаунт 2» — видна
         // ТОЛЬКО при включённой «Авторизации 2». Запускает AuthV2Activity (WebView-флоу
         // по образцу vk-lite-auth). Обычный «Войти через VK» остаётся как был.
+        // #AUTH-SWAP (2026-10-21): порядок изменён — «Войти в аккаунт 2» теперь ПЕРВАЯ
+        // (верхняя), «Войти через VK» (ниже) скрыта по умолчанию (gate authV1Enabled).
         if (authV2Enabled) {
             Spacer(Modifier.height(4.dp))
             Button(
@@ -260,6 +233,45 @@ internal fun LandingScreen(
                 color = MaterialTheme.colorScheme.primary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+        }
+
+        // #AUTH-SWAP: «Войти через VK» — ВТОРАЯ кнопка, видна только при authV1Enabled
+        // (default false — скрыта; включается тумблером «Авторизация» в Разработка).
+        // #VKAUTH-V2 #VKID-ONLY Primary CTA — «Войти через VK» (встроенный WebView,
+        // VK ID flow). Грузит m.vk.ru/login?app_id=6287487 → VK ID SDK делает
+        // silent exchange remixsid→web_token (или показывает форму входа VK ID).
+        // Полный cookie capture (9 remix-ключей) → submitWebToken. Path 1.5
+        // silentRefreshViaRemixsid удерживает сессию при смене IP (remixsid +
+        // httoken + remixnsid + p cookie ... в storage). Авторизация ТОЛЬКО через VK ID.
+        if (authV1Enabled) {
+            Spacer(Modifier.height(4.dp))
+            Button(
+                onClick = { authAction(onStartWebView) },
+                enabled = !isLoading && !checkingRealNet,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (offline) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                        else MaterialTheme.colorScheme.primary,
+                    contentColor = if (offline) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        else MaterialTheme.colorScheme.onPrimary,
+                ),
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Login,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Войти через VK", style = MaterialTheme.typography.titleMedium)
+            }
+
+            Text(
+                text = "Вход через VK ID. Сессия удерживается при смене сети — " +
+                       "remixsid, p cookie и все cookies сохраняются автоматически.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center,
             )
         }
 

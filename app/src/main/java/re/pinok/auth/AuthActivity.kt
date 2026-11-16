@@ -622,6 +622,11 @@ private fun AuthScreen(
     val authV2Enabled = runCatching {
         SovaApp.get(context).prefsSnapshot?.authV2Enabled ?: true
     }.getOrDefault(true)
+    // #AUTH-SWAP: видимость кнопки «Войти через VK» (default false — скрыта).
+    // Тумблер «Авторизация» в Разработка (SovaPrefs.authV1Enabled). Нет снапшота — false.
+    val authV1Enabled = runCatching {
+        SovaApp.get(context).prefsSnapshot?.authV1Enabled ?: false
+    }.getOrDefault(false)
 
     // Fix #190: показываем поле «Вставьте ссылку» после запуска внешнего
     // браузера. Пользователь копирует URL из адресной строки браузера
@@ -750,6 +755,8 @@ private fun AuthScreen(
                     // → запуск AuthV2Activity (WebView-флоу vk-lite).
                     onStartAuthV2 = onStartAuthV2,
                     authV2Enabled = authV2Enabled,
+                    // #AUTH-SWAP: видимость «Войти через VK» (default false — скрыта).
+                    authV1Enabled = authV1Enabled,
                     // Fix #190: при запуске внешнего браузера показываем подсказку
                     // «Поделиться → PinoK» (Fix #191 — основной способ).
                     onLaunchExternalBrowser = {

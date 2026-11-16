@@ -24575,3 +24575,32 @@ finally чистил temp-файл. Стриминг убрал temp-файл И
 Фикс: добавлен catch (CancellationException re-throw + Exception → failedPhotos).
 Завершает #MULTI-PHOTO-FIX: исключения upload (сеть/IO/parse) трекаются как
 failedPhotos, не рвут весь батч — parity с null-веткой. Проверки: nested-comments OK.
+
+## 2026-11-16 — feat(auth): #AUTH-SWAP — порядок кнопок входа + тумблер «Авторизация»
+
+Пользователь: «Войти через ВК 2» должна быть первой, «Войти через ВК» — второй;
+в Настройки → Разработка — тумблер «Авторизация», убирающий видимость «Войти через ВК»
+(default выключен); тумблер видимости «Войти через ВК 2» — default включён.
+
+### SovaPrefs.kt (core/data)
+- Новое поле authV1Enabled (default false) + setAuthV1Enabled + ключ AUTH_V1_ENABLED
+  + поле в Snapshot. authV2Enabled уже был default true (проверено) — соответствует
+  требованию «ВК 2 toggle default ON».
+
+### SettingsScreen.kt (Разработка → Экспериментальные функции)
+- Новый ToggleRow «Авторизация» после «Авторизация 2»: checked=s.authV1Enabled,
+  setAuthV1Enabled. Default false → «Войти через VK» скрыта.
+
+### LandingScreen.kt
+- Новый параметр authV1Enabled: Boolean = false.
+- SWAP порядка: блок «Войти в аккаунт 2» (if authV2Enabled) перемещён ВЫШЕ — теперь
+  ПЕРВАЯ кнопка. Блок «Войти через VK» обёрнут в if (authV1Enabled) — ВТОРАЯ, скрыта
+  по умолчанию. Комментарии #VKAUTH-V2/#VKID-ONLY/#AUTH2/#AUTH2-HINT перенесены с блоками.
+
+### AuthActivity.kt
+- authV1Enabled читается из prefsSnapshot (default false) + пробрасывается в LandingScreen.
+
+### FeedScreen.kt
+- initial Snapshot(...) дополнен authV1Enabled = false (sync с SovaPrefs default).
+
+Проверки: check-nested-comments OK; brace/paren delta (0,0) по всем 5 файлам.

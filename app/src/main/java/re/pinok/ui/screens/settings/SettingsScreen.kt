@@ -591,6 +591,16 @@ private fun DevTab(
                 checked = s.authV2Enabled,
             ) { v -> scope.launch { app.prefs.setAuthV2Enabled(v) } }
         }
+        item {
+            // #AUTH-SWAP: «Авторизация» — видимость кнопки «Войти через VK» на LandingScreen.
+            // Default false (выключен) — кнопка скрыта; пользователь входит через «Войти в аккаунт 2».
+            // Включить здесь (Разработка) → кнопка «Войти через VK» появится ВТОРОЙ по порядку.
+            ToggleRow(
+                title = "Авторизация",
+                subtitle = "Вкл — показать кнопку «Войти через VK» на экране входа (второй, под «Войти в аккаунт 2»). Выкл (по умолчанию) — кнопка скрыта.",
+                checked = s.authV1Enabled,
+            ) { v -> scope.launch { app.prefs.setAuthV1Enabled(v) } }
+        }
 
         // ════════════════════════════════════════════════════════════════
         // #TASK-7-LOGGER-UI: «Беспрерывное логирование» — file-based лог,

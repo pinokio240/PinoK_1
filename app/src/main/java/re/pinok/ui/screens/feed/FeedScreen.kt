@@ -456,6 +456,10 @@ fun FeedScreen(
             callsEnabled = false,
             // #AUTH2: «Авторизация 2» — альтернативный флоу входа (default on, как в SovaPrefs).
             authV2Enabled = true,
+            // #AUTH-SWAP: видимость «Войти через VK» (default false — скрыта, как в SovaPrefs).
+            // Preview/initial Snapshot показывает ПРОД-поведение: кнопка скрыта, пользователь
+            // входит через «Войти в аккаунт 2». Включить тумблером «Авторизация» в Разработка.
+            authV1Enabled = false,
             // Fix #237: showLogFab добавлен в Snapshot — FeedScreen тоже должен
             // передавать initial-значение, иначе компилятор падает:
             // «No value passed for parameter 'showLogFab'».

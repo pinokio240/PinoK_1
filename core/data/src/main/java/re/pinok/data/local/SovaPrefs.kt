@@ -664,6 +664,9 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
             // Default true (2026-10-20) — тумблер в «Разработке» включён, пока пользователь
             // явно его не выключил (сохранённое значение приоритетнее). Только ручной вход.
             authV2Enabled = p[Keys.AUTH_V2_ENABLED] ?: true,
+            // #AUTH-SWAP: видимость кнопки «Войти через VK» (default false — скрыта;
+            // включается тумблером «Авторизация» в Разработка). See LandingScreen.
+            authV1Enabled = p[Keys.AUTH_V1_ENABLED] ?: false,
             authV2HintDisabled = p[Keys.AUTH_V2_HINT_DISABLED] ?: false,
             // #CALLS-SYMMETRIC (01.09): видеозаглушка наружу — симметричный звонок.
             // Default true: следующий Wi-Fi-тест решает гипотезу пользователя.
@@ -1452,6 +1455,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
     suspend fun setCallsEnabled(v: Boolean)          = put(Keys.CALLS_ENABLED, v)
     /** #AUTH2: включить «Авторизацию 2» (альтернативный флоу входа, default false). */
     suspend fun setAuthV2Enabled(v: Boolean)         = put(Keys.AUTH_V2_ENABLED, v)
+    // #AUTH-SWAP: видимость кнопки «Войти через VK» на LandingScreen (default false — скрыта).
+    suspend fun setAuthV1Enabled(v: Boolean)         = put(Keys.AUTH_V1_ENABLED, v)
     suspend fun setAuthV2HintDisabled(v: Boolean)    = put(Keys.AUTH_V2_HINT_DISABLED, v)
     // #CALLS-SYMMETRIC: видеозаглушка наружу (sendrecv без камеры).
     suspend fun setCallsVideoTx(v: Boolean)            = put(Keys.CALLS_VIDEO_TX, v)
@@ -2077,6 +2082,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val callsEnabled: Boolean,
         // #AUTH2 (2026-10-17): «Авторизация 2» — альтернативный флоу входа (прямой HTTP).
         val authV2Enabled: Boolean,
+        // #AUTH-SWAP: видимость кнопки «Войти через VK» на LandingScreen (default false — скрыта).
+        val authV1Enabled: Boolean = false,
         /** AUTH2-HINT-DISMISS: «больше не показывать» инструкцию V2. */
         val authV2HintDisabled: Boolean = false,
         /** #CALLS-SYMMETRIC (01.09, Этап 2-заготовка): отправлять чёрную видеозаглушку
@@ -2534,6 +2541,8 @@ class SovaPrefs(context: Context, debugDefault: Boolean = false) {
         val CALLS_ENABLED           = booleanPreferencesKey("calls_enabled")
         // #AUTH2 (2026-10-17): экспериментальный флоу входа «Авторизация 2» (прямой HTTP OAuth).
         val AUTH_V2_ENABLED          = booleanPreferencesKey("auth_v2_enabled")
+        // #AUTH-SWAP: видимость кнопки «Войти через VK» (default false — скрыта; тумблер «Авторизация»).
+        val AUTH_V1_ENABLED          = booleanPreferencesKey("auth_v1_enabled")
         // AUTH2-HINT-DISMISS: «больше не показывать» для инструкции V2
         val AUTH_V2_HINT_DISABLED    = booleanPreferencesKey("auth_v2_hint_disabled")
         val CALLS_VIDEO_TX          = booleanPreferencesKey("calls_video_tx")
