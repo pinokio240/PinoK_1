@@ -12060,7 +12060,10 @@ class VKApiClient(
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", displayName,
                         UriStreamRequestBody(context.contentResolver, uri,
-                            actualMime.toMediaType(), sizeBytes, onProgress))
+                            actualMime.toMediaType(),
+                            // #UPLOAD-STREAM-FIX: точный Content-Length, не chunked.
+                            if (sizeBytes > 0) sizeBytes else queryUriSizeBytes(uri),
+                            onProgress))
                     .build()
                 // Fix #154: kittenx (web-upload сервер) отклоняет POST без браузерных
                 // заголовков — HTTP 405. Origin/Referer/Chrome-UA как у vk.com.
@@ -12125,6 +12128,10 @@ class VKApiClient(
     ): UploadedPhoto? {
         if (isOffline()) return null
         return withContext(Dispatchers.IO) {
+            // #UPLOAD-STREAM-FIX: точный Content-Length обязателен — chunked
+            // (contentLength=-1) VK photo-сервер отклоняет. Раньше сюда приходил
+            // -1 из мест, где размер не передавался (камера/пикер фото).
+            val resolvedSize = if (sizeBytes > 0) sizeBytes else queryUriSizeBytes(uri)
             val mediaType = (mime ?: "image/jpeg").toMediaType()
             val ext = when (mime?.lowercase()) {
                 "image/png" -> "png"
@@ -12141,7 +12148,7 @@ class VKApiClient(
                     // Тело на КАЖДУЮ попытку: UriStreamRequestBody переоткрывает
                     // поток в writeTo, поэтому ретрай после частичной отправки корректен.
                     val body = UriStreamRequestBody(
-                        context.contentResolver, uri, mediaType, sizeBytes, onProgress)
+                        context.contentResolver, uri, mediaType, resolvedSize, onProgress)
                     val multipart = MultipartBody.Builder()
                         .setType(MultipartBody.FORM)
                         .addFormDataPart("photo", "photo.$ext", body)
@@ -12263,7 +12270,9 @@ class VKApiClient(
             try {
                 val mime = guessMimeType(displayName).ifBlank { "video/mp4" }
                 val baseBody = UriStreamRequestBody(
-                    context.contentResolver, uri, mime.toMediaType(), sizeBytes)
+                    context.contentResolver, uri, mime.toMediaType(),
+                    // #UPLOAD-STREAM-FIX: точный Content-Length, не chunked.
+                    if (sizeBytes > 0) sizeBytes else queryUriSizeBytes(uri))
                 val progressBody = ProgressRequestBody(baseBody, onProgress)
                 val multipart = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
@@ -12408,7 +12417,9 @@ class VKApiClient(
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", displayName,
                         UriStreamRequestBody(context.contentResolver, uri,
-                            actualMime.toMediaType(), sizeBytes))
+                            actualMime.toMediaType(),
+                            // #UPLOAD-STREAM-FIX: точный Content-Length, не chunked.
+                            if (sizeBytes > 0) sizeBytes else queryUriSizeBytes(uri)))
                     .build()
                 // Fix #154: те же браузерные заголовки для wall-comment doc upload.
                 val req = Request.Builder()
@@ -12480,8 +12491,14 @@ class VKApiClient(
 
     /**
      * #UPLOAD-STREAM-UNIFY: размер файла по Uri через OpenableColumns.SIZE.
-     * -1 → провайдер не ответил (колонки нет / query упал) — UriStreamRequestBody
-     * тогда уходит chunked transfer-encoding (OkHttp contentLength=-1).
+     *
+     * #UPLOAD-STREAM-FIX (почему «не работает прикрепление файлов с устройства»):
+     * при -1 OkHttp уходил в chunked transfer-encoding (без Content-Length) —
+     * VK upload-серверы (kittenx/pu.vk.com) такие POST отклоняют. Старый код
+     * всегда слал точную длину (readBytes/File), как и Fenrir (их
+     * uri.contentLength считает байты подсчётом потока). Теперь и мы: сначала
+     * SIZE-колонка провайдера, если её нет — один проход потока со счётом байтов
+     * (без копий на диск и без чтения всего файла в память).
      */
     private fun queryUriSizeBytes(uri: Uri): Long {
         var sizeBytes = -1L
@@ -12491,6 +12508,24 @@ class VKApiClient(
                 if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) sizeBytes = c.getLong(idx)
             }
         } catch (_: Exception) { }
+        if (sizeBytes > 0) return sizeBytes
+        // Fallback: подсчёт байтов (один проход потока). Вызывается из
+        // Dispatchers.IO-контекстов — блокировка допустима.
+        try {
+            context.contentResolver.openInputStream(uri)?.use { ins ->
+                val buf = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    val r = ins.read(buf)
+                    if (r == -1) break
+                    total += r
+                }
+                sizeBytes = total
+                AppLog.i("VKApiClient", "queryUriSizeBytes: counted $total bytes (provider gave no SIZE) for $uri")
+            }
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "queryUriSizeBytes: cannot count bytes for $uri: ${e.message}")
+        }
         return sizeBytes
     }
 
