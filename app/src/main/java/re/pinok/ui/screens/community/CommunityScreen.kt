@@ -269,7 +269,27 @@ fun CommunityScreen(
     val wallState = rememberPagedListState<Post>(
         fetcher = { cursor ->
             val offset = (cursor as? ServerOffset)?.offset ?: 0
-            val wp = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = offset)
+            // #VIDEO-CARDS-RESTORE: первая страница стены сообщества — unified API
+            // owners.getMainTab (web.api.vk.ru), который возвращает video-посты
+            // (type:"video" — пост, состоящий из видео), отсутствующие в classic
+            // wall.get. owners.getMainTab — cursor-based (response.next_from),
+            // offset НЕ поддерживается (HAR /tmp/owners_request.json — в postData
+            // нет offset), а WallGetExtendedResult не несёт курсор → для пагинации
+            // (offset>0) используем classic wall.get (offset-based), иначе при
+            // offset>0 owners.getMainTab вернул бы ТУ ЖЕ первую страницу → дубли
+            // (либо пусто после дедупа) и бесконечная догрузка. Fallback на wall.get
+            // и для offset==0 если owners.getMainTab вернёт пусто (метод не
+            // поддерживается/ошибка сети).
+            var wp = if (offset == 0) {
+                var res = app.apiClient.ownersGetMainTab(ownerId = -groupId, count = 30, offset = offset)
+                if (res.posts.isEmpty() && res.rawCount == 0) {
+                    AppLog.w("CommunityScreen", "ownersGetMainTab empty — fallback to wallGetExtended")
+                    res = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = offset)
+                }
+                res
+            } else {
+                app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = offset)
+            }
             signerNames = signerNames + wp.profileNames
             val page = wp.posts
                 .filter { it.id > 0 && it.ownerId != 0L }

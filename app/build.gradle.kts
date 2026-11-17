@@ -54,7 +54,8 @@ android {
         buildConfigField("String", "VK_CLIENT_ID", "\"2274003\"")
         buildConfigField("String", "VK_CLIENT_SECRET", "\"hHbZxrka2uZ6jB1inYsH\"")
         buildConfigField("String", "VK_API_VERSION", "\"5.289\"")
-        buildConfigField("String", "VK_API_HOST", "\"https://api.vk.com\"")
+        // #API-RU (2026-11-17): api.vk.com → api.vk.ru — российский endpoint VK (classic API methods).
+        buildConfigField("String", "VK_API_HOST", "\"https://api.vk.ru\"")
         // VK OAuth endpoint (oauth.vk.com) — Implicit Grant flow, password auth, 2FA.
         // НЕ id.vk.com — id.vk.com это VK ID endpoint (только exchange_token refresh).
         buildConfigField("String", "VK_OAUTH_HOST", "\"https://oauth.vk.com\"")

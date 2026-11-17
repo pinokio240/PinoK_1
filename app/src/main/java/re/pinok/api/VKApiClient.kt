@@ -18223,6 +18223,153 @@ class VKApiClient(
     }
 
     /**
+     * #VIDEO-CARDS-RESTORE: unified API метод стены сообщества/профиля.
+     *
+     * VK web (m.vkvideo.ru) грузит стену сообщества через `owners.getMainTab`
+     * на `web.api.vk.ru` (WEB-шлюз), а НЕ через classic `wall.get` на
+     * `api.vk.ru`. Classic `wall.get` НЕ возвращает `type:"video"` items —
+     * посты, СОСТОЯЩИЕ из видео (video-карточки), вообще не приходят в
+     * приложение → карточки не отображаются. `owners.getMainTab` возвращает
+     * `response.items[]` со СМЕШАННЫМИ типами:
+     *  - `type:"video"` — видео-пост: обёртка `{type, source_id, date,
+     *    post_id, video:{count, items:[Video]}, header}`. Видео-данные в
+     *    `video.items[0]` (массив!). На верхнем уровне НЕТ id/owner_id/text/
+     *    attachments — есть `post_id` и `source_id`. Строим Post: id=post_id,
+     *    ownerId=fromId=source_id, text="", attachments=[Attachment(type=
+     *    "video", video=parseVideoFull(video.items[0]))].
+     *  - `type:"post"` — обычный пост (id/owner_id/from_id/text/attachments/
+     *    likes/reposts/views/comments/donut/copyright/copy_history — как
+     *    classic wall.get + доп. поля). Переиспользуем [parsePostMini]; id
+     *    берём из `post_id` если `id` отсутствует (VK unified кладёт id в
+     *    post_id для post-type тоже — см. /tmp/sample_post_item.json:
+     *    id==post_id==16449).
+     *  - `type:"ads"` — реклама, skip.
+     *  - Прочие unknown типы → skip + лог.
+     *
+     * Пагинация: owners.getMainTab — CURSOR-based (`response.next_from`), offset
+     * НЕ поддерживается (HAR /tmp/owners_request.json — в postData НЕТ offset,
+     * только owner_id/count/ref/fields/filters). [WallGetExtendedResult] не
+     * несёт курсор → вызывающая сторона (CommunityScreen) для offset>0
+     * использует classic [wallGetExtended]. totalCount: метод НЕ возвращает
+     * response.count/total_count (HAR /tmp/owners_getMainTab_response.json —
+     * оба None) → totalCount=0 (конец пагинации считается по rawCount==0 на
+     * следующей странице / переключением на wall.get).
+     *
+     * profileNames: парсим response.profiles[] (users → «Имя Фамилия») как в
+     * [wallGetExtended]; для стен групп profiles обычно пуст (имя группы
+     * приходит из GroupInfo). response.groups[] не парсим сюда (group id
+     * отрицательный, profileNames — для signer_id пользователей).
+     *
+     * @param ownerId ID стены (отрицательный для групп)
+     * @param count число элементов (HAR использовал 10; CommunityScreen просит 30)
+     * @param offset НЕ передаётся в API (метод cursor-based) — оставлен в
+     *              сигнатуре для совместимости с [wallGetExtended] call-site
+     */
+    suspend fun ownersGetMainTab(
+        ownerId: Long,
+        count: Int = 20,
+        offset: Int = 0,
+    ): WallGetExtendedResult {
+        if (isOffline()) return WallGetExtendedResult(emptyList(), emptyMap())
+        val args = mutableMapOf(
+            "owner_id" to ownerId.toString(),
+            "count" to count.toString(),
+            "ref" to "club",
+            // #API-RU (2026-11-17): fields из HAR /tmp/owners_request.json.
+            "fields" to "photo_base,sex,first_name_dat,last_name_dat,video_files,verified,trending,friend_status,first_name_gen,first_name_acc,emoji_status,image_status,can_write_private_message,can_message,has_unseen_stories,is_government_organization",
+        )
+        // offset НЕ добавляем: HAR /tmp/owners_request.json не содержит offset в
+        // postData — owners.getMainTab cursor-based (response.next_from), offset
+        // сервером игнорируется. Параметр оставлен в сигнатуре для совместимости.
+        val json = call("owners.getMainTab", args, forceWebGateway = true)
+            ?: return WallGetExtendedResult(emptyList(), emptyMap())
+        return try {
+            val resp = json.getAsJsonObject("response")
+                ?: return WallGetExtendedResult(emptyList(), emptyMap())
+            val profileNames = HashMap<Long, String>()
+            resp.getAsJsonArray("profiles")?.forEach { el ->
+                if (!el.isJsonObject) return@forEach
+                val o = el.asJsonObject
+                val id = o.get("id")?.takeIf { !it.isJsonNull }?.asLong ?: return@forEach
+                val first = o.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                val last = o.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                val name = (first + " " + last).trim()
+                if (id > 0L && name.isNotEmpty()) profileNames[id] = name
+            }
+            val items = resp.getAsJsonArray("items")
+                ?: return WallGetExtendedResult(emptyList(), profileNames)
+            val seenKeys = HashSet<Pair<Long, Long>>()
+            var videoItems = 0
+            var postItems = 0
+            val posts = items.mapNotNull { el ->
+                if (!el.isJsonObject) return@mapNotNull null
+                val item = el.asJsonObject
+                val type = safeString(item.get("type")) ?: return@mapNotNull null
+                try {
+                    when (type) {
+                        "video" -> {
+                            // video-пост: обёртка {source_id, post_id, date,
+                            // video:{items:[Video]}}. На верхнем уровне НЕТ
+                            // id/owner_id/text/attachments → строим Post вручную.
+                            videoItems++
+                            val sourceId = safeLong(item.get("source_id"))
+                            val postId = safeLong(item.get("post_id"))
+                            if (postId <= 0L || sourceId == 0L) return@mapNotNull null
+                            if (!seenKeys.add(sourceId to postId)) return@mapNotNull null
+                            val firstVideoEl = getObj(item, "video")?.let { getArr(it, "items") }
+                                ?.firstOrNull { it.isJsonObject }
+                            val firstVideo = firstVideoEl?.asJsonObject
+                            // parseVideoFull полностью переварит video.items[0]:
+                            // image[], first_frame[], files{}, likes{}, reposts{},
+                            // restriction{}, access_key (из player &hash=), views(int).
+                            val video = firstVideo?.let { parseVideoFull(it) }
+                            if (video == null) return@mapNotNull null
+                            Post(
+                                id = postId,
+                                ownerId = sourceId,
+                                fromId = sourceId,
+                                date = safeLong(item.get("date")),
+                                text = "",
+                                attachments = listOf(Attachment(type = "video", video = video)),
+                                postType = "video",
+                            )
+                        }
+                        "post" -> {
+                            // post-type: classic post (id/owner_id/text/attachments/
+                            // likes/reposts/views/comments/donut/copyright/copy_history).
+                            // VK unified кладёт id в post_id тоже — fallback если id
+                            // отсутствует (HAR /tmp/sample_post_item.json: id==post_id).
+                            postItems++
+                            val post = parsePostMini(item)
+                            val pid = if (post.id > 0) post.id else safeLong(item.get("post_id"))
+                            val fixed = if (pid != post.id) post.copy(id = pid) else post
+                            if (fixed.id <= 0L || fixed.ownerId == 0L) return@mapNotNull null
+                            if (!seenKeys.add(fixed.ownerId to fixed.id)) return@mapNotNull null
+                            fixed
+                        }
+                        "ads" -> null  // реклама — skip
+                        else -> {
+                            AppLog.w("VKApiClient", "ownersGetMainTab: unknown item type=$type, skip")
+                            null
+                        }
+                    }
+                } catch (e: Exception) {
+                    AppLog.e("VKApiClient", "ownersGetMainTab: item parse error type=$type", e)
+                    null
+                }
+            }
+            // totalCount: owners.getMainTab НЕ возвращает response.count/
+            // total_count (HAR /tmp/owners_getMainTab_response.json — оба None).
+            val totalCount = safeInt(resp.get("count"))
+            AppLog.i("VKApiClient", "ownersGetMainTab: owner=$ownerId rawItems=${items.size()} parsed=${posts.size} videoItems=$videoItems postItems=$postItems")
+            WallGetExtendedResult(posts, profileNames, items.size(), totalCount)
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "ownersGetMainTab parse error", e)
+            WallGetExtendedResult(emptyList(), emptyMap())
+        }
+    }
+
+    /**
      * COMMUNITY-SEARCH: поиск постов на стене сообщества.
      * VK: wall.search — owner_id, query, owners_only, count, offset, extended.
      *

@@ -24672,3 +24672,44 @@ filter или groups.getContentForTabs(tab=video).
   нет → парсинг/рендер баг (тогда копать parseVideoFull/VideoThumbnail).
 
 Проверки: check-nested-comments OK; brace delta (0,0) по обоим файлам.
+
+## 2026-11-17 — feat(video): #VIDEO-CARDS-RESTORE — видео-посты в карточках через owners.getMainTab
+
+Пользователь дал архив m.7z (HAR «Replay Vault_ записи сообщества» 47MB) + HTML-снапшот
+поста. Требование: «api.vk.com надо заменить на api.vk.ru; разберись как устроены
+карточки видео-постов и восстанови поддержку видео в постах-карточках; тотальное
+исследование; карточки должны поддерживать посты с видео даже с отметкой о донате».
+
+### ТОТАЛЬНОЕ ИСЛЕДОВАНИЕ (реверс HAR + кода)
+- VK web (m.vkvideo.ru) грузит стену сообщества через `owners.getMainTab` на
+  `web.api.vk.ru` (unified API), НЕ classic `wall.get`. Ответ: response.items[]
+  со СМЕШАННЫМИ типами:
+    • type:"video" — видео-пост (пост СОСТОИТ из видео). Обёртка {source_id, post_id,
+      date, video:{count, items:[Video]}}. Видео в video.items[0] (массив!).
+    • type:"post" — обычный пост (attachments[], text, donut, likes — как classic + доп).
+    • type:"ads" — реклама.
+- Classic `wall.get` на `api.vk.com` НЕ возвращает `type:"video"` items → видео-посты
+  ВООБЩЕ не приходили в PinoK → карточки не отображались. Корень проблемы — НЕ парсинг
+  (parseVideoFull/PostCard/VideoThumbnail робастны), а endpoint+метод.
+- video.items[0] имеет ВСЕ поля Video model: id, owner_id, title, duration, image[],
+  first_frame[], files{}, likes{}, reposts{}, views, access_key (из player &hash=),
+  restriction{} (для donut). parseVideoFull переварит.
+
+### РЕАЛИЗАЦИЯ (3 файла)
+- build.gradle.kts: VK_API_HOST "api.vk.com" → "api.vk.ru" (#API-RU).
+- VKApiClient.kt: +suspend fun ownersGetMainTab(ownerId, count=20, offset=0)
+  → call("owners.getMainTab", args, forceWebGateway=true) на web.api.vk.ru.
+  Парсинг response.items[]: type:"video" → Post(id=post_id, ownerId=source_id,
+  attachments=[Attachment(video=parseVideoFull(video.items[0]))]); type:"post" →
+  parsePostMini + fallback post_id→id; type:"ads" → skip. Per-item try/catch.
+  diag-лог videoItems/postItems. totalCount=0 (метод не возвращает count — cursor-based).
+- CommunityScreen.kt: offset==0 → ownersGetMainTab (с fallback на wallGetExtended
+  если пусто); offset>0 → wallGetExtended (offset-based, т.к. owners.getMainTab
+  cursor-based через next_from, а WallGetExtendedResult не несёт курсор).
+
+### DONUT
+parseVideoFull уже парсит restriction (e8614c6); PostCard donut-badge уже проверяет
+video.isPaidVideo (88a1a60); VideoThumbnail lock overlay (e8614c6). НЕ менялись —
+donut-видео теперь приходят через owners.getMainTab и корректно помечаются.
+
+Проверки: check-nested-comments OK; brace delta (0,0) по 3 файлам.
