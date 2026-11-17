@@ -2,6 +2,7 @@
 package re.pinok.ui.screens.videoplayer
 
 import android.view.ViewGroup
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 // Fix #140 (2026-08-03): WindowInsetsControllerCompat — замена deprecated
 // systemUiVisibility / FLAG_FULLSCREEN. На API 30+ (R) и особенно на API 35+
@@ -2378,6 +2379,43 @@ fun VideoPlayerScreen(
         }
     }
 
+    // #PIP-BACK-MINIMIZE (2026-11-17): back-стрелка И системный back во время
+    // воспроизведения → минимизация в PiP (как PiP-кнопка), НЕ закрытие. На
+    // паузе/остановке → onBack (закрыть). Раньше back всегда закрывал видео →
+    // пользователь терял просмотр. Теперь: back → PiP → второй back из fullscreen
+    // PiP возвращает в пост (VideoPipActivity.returnToApp).
+    // BackHandler здесь перехватывает системный back ПРЕЖДЕ overlay-BackHandler'а
+    // в SovaNavHost (VideoPlayerScreen composed позже → приоритет).
+    val minimizeToPipOrClose: () -> Unit = {
+        val p = exoPlayer
+        val url = p?.currentMediaItem?.localConfiguration?.uri?.toString()
+        if (p != null && p.isPlaying && url != null) {
+            p.playWhenReady = false
+            val act = context as? android.app.Activity
+            if (act != null) {
+                act.startActivity(
+                    re.pinok.ui.videoplayer.VideoPipActivity.intent(
+                        act,
+                        url,
+                        resolvedVideo.title,
+                        p.currentPosition,
+                        resolvedVideo.ownerId,
+                        resolvedVideo.id,
+                        playbackRate,
+                    )
+                )
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    onBack()
+                }, 400L)
+            } else {
+                onBack()
+            }
+        } else {
+            onBack()
+        }
+    }
+    BackHandler(enabled = true) { minimizeToPipOrClose() }
+
     Scaffold(
         containerColor = VK_BLACK,
         topBar = {
@@ -2445,7 +2483,9 @@ fun VideoPlayerScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    // #PIP-BACK-MINIMIZE: back-стрелка → minimizeToPipOrClose
+                    // (PiP если играет, иначе закрыть). См. лямбду выше Scaffold.
+                    IconButton(onClick = minimizeToPipOrClose) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад", tint = VK_WHITE)
                     }
                 },

@@ -24743,3 +24743,24 @@ PiP → даже если бы вернулись в app, пользовател
 4. Back (системный или ArrowBack) → returnToApp() → app foreground (пост) + finish PiP.
 
 Проверки: check-nested-comments OK; brace delta (0,0) по обоим файлам.
+
+## 2026-11-17 — feat(pip): #PIP-BACK-MINIMIZE — back-стрелка/системный back → PiP при воспроизведении
+
+Пользователь: «если в сообществе просто открыть видео на стене, то видео просто
+закроется при нажатии стрелки назад».
+
+### Фикс
+VideoPlayerScreen.kt:
+- +val minimizeToPipOrClose лямбда: если exoPlayer.isPlaying → стартует VideoPipActivity
+  (PiP) + onBack(400мс задержка); иначе → onBack (закрыть). Логика та же что у PiP-кнопки.
+- +BackHandler(enabled=true) { minimizeToPipOrClose() } перед Scaffold — перехватывает
+  системный back ПРЕЖДЕ overlay-BackHandler'а в SovaNavHost (VideoPlayerScreen composed
+  позже → приоритет). Раньше системный back всегда закрывал видео.
+- back-стрелка (TopAppBar navigationIcon): onClick = minimizeToPipOrClose (было onBack).
+
+### Поток
+- Открыл видео на стене → смотрит → back (стрелка или системный) → PiP (плавающее окно,
+  overlay закрылся) → второй back из fullscreen PiP → returnToApp → пост/стена.
+- Если видео на паузе → back просто закрывает (onBack).
+
+Проверки: check-nested-comments OK; brace delta (0,0).
