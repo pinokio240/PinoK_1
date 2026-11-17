@@ -3077,6 +3077,16 @@ fun VideoPlayerScreen(
                                                                         playbackRate,
                                                                     )
                                                                 )
+                                                                // #PIP-RETURN-POST (2026-11-17): после старта VideoPipActivity
+                                                                // закрываем overlay видеоплеера — пользователь возвращается к
+                                                                // посту, PiP плавает поверх. Раньше overlay оставался открытым →
+                                                                // после разворачивания PiP и back пользователь не попадал на пост.
+                                                                // Задержка 400мс: VideoPipActivity входит в PiP через ~200мс
+                                                                // (onResume + postDelayed); закрываем overlay после входа в PiP,
+                                                                // иначе мелькание fullscreen VideoPipActivity.
+                                                                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                                                    onBack()
+                                                                }, 400L)
                                                             }
                                                         }
                                                     },

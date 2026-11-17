@@ -16,6 +16,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import androidx.activity.ComponentActivity
+import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -195,10 +196,10 @@ class VideoPipActivity : ComponentActivity() {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         IconButton(onClick = {
-                            savePosition()
-                            player?.release()
-                            player = null
-                            finishAndRemoveTask()
+                            // #PIP-RETURN-POST: возвращаем в приложение (на пост),
+                            // не на home screen. returnToApp сохранит позицию и
+                            // поднимет task MainActivity.
+                            returnToApp()
                         }) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
@@ -222,6 +223,13 @@ class VideoPipActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppLog.i(TAG, "onCreate")
+
+        // #PIP-RETURN-POST: системный back (не ArrowBack иконка) тоже возвращает
+        // в приложение, а не на home screen. Без этого default finish() на
+        // singleTask + excludeFromRecents Activity возвращал на launcher.
+        onBackPressedDispatcher.addCallback(this) {
+            returnToApp()
+        }
 
         val url = intent.getStringExtra(EXTRA_URL)
         val position = intent.getLongExtra(EXTRA_POSITION, 0L)
@@ -299,9 +307,8 @@ class VideoPipActivity : ComponentActivity() {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         IconButton(onClick = {
-                            savePosition()
-                            p?.release()
-                            finishAndRemoveTask()
+                            // #PIP-RETURN-POST: возвращаем в приложение (на пост).
+                            returnToApp()
                         }) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
@@ -448,6 +455,36 @@ class VideoPipActivity : ComponentActivity() {
         } catch (e: Exception) {
             AppLog.w(TAG, "refreshPipParams failed: ${e.message}")
         }
+    }
+
+    /**
+     * #PIP-RETURN-POST (2026-11-17): возврат в приложение (на пост) из fullscreen
+     * VideoPipActivity (развёрнутой из PiP). Раньше finishAndRemoveTask() на
+     * singleTask + excludeFromRecents Activity возвращал на HOME screen, а не в
+     * приложение — пользователь не мог вернуться к посту. Теперь: сохраняем
+     * позицию, освобождаем плеер, поднимаем task MainActivity на передний план,
+     * затем finish. VideoPlayerScreen overlay закрывается при старте PiP (см.
+     * VideoPlayerScreen PiP-кнопку) → пользователь видит пост.
+     */
+    private fun returnToApp() {
+        savePosition()
+        player?.release()
+        player = null
+        try {
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+            if (launchIntent != null) {
+                launchIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                )
+                startActivity(launchIntent)
+                AppLog.i(TAG, "returnToApp: brought app task to foreground")
+            } else {
+                AppLog.w(TAG, "returnToApp: launchIntent is null")
+            }
+        } catch (e: Exception) {
+            AppLog.w(TAG, "returnToApp: launch failed: ${e.message}")
+        }
+        finishAndRemoveTask()
     }
 
     private fun buildPipParams(): PictureInPictureParams {

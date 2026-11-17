@@ -24713,3 +24713,33 @@ video.isPaidVideo (88a1a60); VideoThumbnail lock overlay (e8614c6). НЕ мен�
 donut-видео теперь приходят через owners.getMainTab и корректно помечаются.
 
 Проверки: check-nested-comments OK; brace delta (0,0) по 3 файлам.
+
+## 2026-11-17 — fix(pip): #PIP-RETURN-POST — возврат из PiP в пост после разворачивания
+
+Пользователь: «PIP плеер не возвращается обратно в пост после разворачивания обратно».
+
+### Корень
+VideoPipActivity (singleTask + excludeFromRecents) — отдельный task. При back из
+fullscreen (развёрнутого из PiP) finishAndRemoveTask() возвращал на HOME screen,
+не в приложение. Дополнительно: VideoPlayerScreen overlay НЕ закрывался при старте
+PiP → даже если бы вернулись в app, пользователь видел overlay видеоплеера, не пост.
+
+### Фикс (2 файла)
+- VideoPipActivity.kt:
+  - +private fun returnToApp(): сохраняет позицию, освобождает плеер, поднимает
+    task MainActivity (getLaunchIntentForPackage + NEW_TASK + RESET_TASK_IF_NEEDED),
+    затем finishAndRemoveTask().
+  - Оба ArrowBack onClick (onCreate + onNewIntent setContent) → returnToApp().
+  - +onBackPressedDispatcher.addCallback { returnToApp() } — системный back тоже.
+  - ACTION_CLOSE (PiP window close button) оставлен как был (app уже foreground).
+- VideoPlayerScreen.kt: PiP-кнопка после startActivity(VideoPipActivity) закрывает
+  overlay (onBack()) с задержкой 400мс (PiP входит через ~200мс). Пользователь
+  возвращается к посту, PiP плавает поверх.
+
+### Поток после фикса
+1. Пост → tap видео → VideoPlayerScreen overlay.
+2. Tap PiP → VideoPipActivity стартует, входит в PiP (200мс) → overlay закрывается (400мс) → пост виден.
+3. Tap PiP → fullscreen VideoPipActivity.
+4. Back (системный или ArrowBack) → returnToApp() → app foreground (пост) + finish PiP.
+
+Проверки: check-nested-comments OK; brace delta (0,0) по обоим файлам.
