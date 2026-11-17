@@ -211,13 +211,22 @@ fun PostCard(
                     ),
                 )
             }
-            // #DONUT-BADGE (2026-11-17): платный пост (donut.is_donut) — просто
-            // метка, чтобы пользователь знал: контент доступен по подписке.
-            // Клики НЕ блокируем (открытие может дать ошибку, но это стандрат VK).
-            val isPaidPost = post.isDonut || donut?.placeholder != null
+            // #DONUT-BADGE (2026-11-17): платный пост — post.isDonut (post-level) ИЛИ
+            // любое video-вложение с restriction (video-level donut, как в Replay Vault:
+            // post.is_donut=false, но video.restriction есть). Раньше проверяли только
+            // post.isDonut → бейдж НЕ показывался для постов с платным видео.
+            // #DONUT-VIDEO-BADGE (2026-11-17 доработка): извлекаем цену из restriction
+            // (button.title, например «299 ₽/мес») и показываем в бейдже.
+            val paidVideo = post.attachments
+                ?.firstOrNull { it.type == "video" && it.video?.isPaidVideo == true }
+                ?.video
+            val hasPaidVideo = paidVideo != null
+            val isPaidPost = post.isDonut || donut?.placeholder != null || hasPaidVideo
+            val paidPrice = paidVideo?.restriction?.button?.title
+            val paidBadgeText = if (!paidPrice.isNullOrBlank()) "Платный пост · $paidPrice" else "Платный пост"
             if (isPaidPost) {
                 Text(
-                    text = "Платный пост",
+                    text = paidBadgeText,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.tertiary,
                     fontWeight = FontWeight.Medium,

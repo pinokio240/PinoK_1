@@ -24640,3 +24640,35 @@ wall.get 260KB, но карточки с видео отсутствуют). И�
 Что дальше: проверить свежую сборку; если карточек так и нет — логировать raw items wall.get
 (количество постов с video) и сравнить с VK web; при необходимости использовать wall.get с другим
 filter или groups.getContentForTabs(tab=video).
+
+## 2026-11-17 — feat(donut): #DONUT-VIDEO-BADGE + #VIDEO-CARDS-DIAG — доработка donut + диагностика видео-карточек
+
+Пользователь дал архив «для донов» (4 HTML снапшота Replay Vault + HAR 39MB VK web-сессии).
+Два задания: (1) разобраться почему посты-карточки с видео не отображаются;
+(2) доработать отличие постов для донатов (была попытка в e8614c6).
+
+### Реверс снапшота
+- HTML доказывает: VK WEB (web.api.vk.ru, unified API) ОТДАЁТ видео-посты с donut.
+  В ответе 187+ donut/restriction-маркеров, `<video>` теги, restriction-объекты
+  ВНУТРИ video-вложений ({title:"Только для донов автора", button:{action:"donat",
+  title:"299 ₽/мес", action_url:...}, blur:1, can_play:0}).
+- post.is_donut = false у ВСЕХ постов — donut-маркер доступности НЕ на уровне поста,
+  а ВНУТРИ video.restriction. Это объясняет почему бейдж e8614c6 не показывался.
+- HAR: VK web использует execute→groups.getById + wkview.php + ruim* (unified API).
+  Classic api.vk.com (используется PinoK) — ДРУГОЙ endpoint; likely НЕ отдаёт
+  donut-посты не-подписчику (server-side filter, гипотеза #1 из e8614c6 worklog).
+
+### Доработка donut (#DONUT-VIDEO-BADGE, PostCard.kt)
+- Баг e8614c6: isPaidPost = post.isDonut || donut?.placeholder — НЕ проверял
+  video.isPaidVideo. Для Replay Vault (is_donut=false, restriction в video) бейдж
+  НЕ показывался. Фикс: добавлен paidVideo = attachments.firstOrNull{video.isPaidVideo};
+  isPaidPost += hasPaidVideo. Бейдж показывает цену из restriction.button.title:
+  «Платный пост · 299 ₽/мес».
+
+### Диагностика видео-карточек (#VIDEO-CARDS-DIAG, VKApiClient.kt)
+- wallGet + wallGetExtended: логируют rawItems/parsed/withVideo/total. Пользователь
+  запускает на устройстве, смотрит logcat: если rawItems>0 but withVideo=0 →
+  server-side filter (VK не отдаёт видео не-подписчику). Если withVideo>0 но карточек
+  нет → парсинг/рендер баг (тогда копать parseVideoFull/VideoThumbnail).
+
+Проверки: check-nested-comments OK; brace delta (0,0) по обоим файлам.

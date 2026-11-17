@@ -13362,7 +13362,7 @@ class VKApiClient(
             // Fix #53: защитная дедупликация по (ownerId, id) — иногда VK возвращает
             // закреплённый пост и в начале списка, и в основной ленте одновременно.
             val seenKeys = HashSet<Pair<Long, Long>>()
-            items.mapNotNull { el ->
+            val posts = items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val post = parsePostMini(el.asJsonObject)
                 if (post.id <= 0L || post.ownerId == 0L) return@mapNotNull null
@@ -13372,6 +13372,13 @@ class VKApiClient(
                 }
                 post
             }
+            // #VIDEO-CARDS-DIAG (2026-11-17): диагностика «почему посты с видео не
+            // отображаются» — см. wallGetExtended. Логируем кол-во постов с video.
+            val videoPosts = posts.count { p ->
+                p.attachments?.any { it.type == "video" && it.video != null } == true
+            }
+            AppLog.i("VKApiClient", "wallGet: owner=$ownerId filter=all rawItems=${items.size()} parsed=${posts.size} withVideo=$videoPosts")
+            posts
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "wallGet parse error", e)
             emptyList()
@@ -18199,6 +18206,15 @@ class VKApiClient(
             // P0.47: totalCount = response.count (общее количество на сервере).
             // Конец: offset + rawCount >= totalCount (без ограничения по pageSize).
             val totalCount = safeInt(resp.get("count"))
+            // #VIDEO-CARDS-DIAG (2026-11-17): диагностика «почему посты с видео не
+            // отображаются». Логируем кол-во постов с video-вложениями. Если
+            // rawItems>0 но withVideo=0 — либо VK не отдаёт видео-посты не-подписчику
+            // (server-side donut filter для групп вроде Replay Vault), либо парсинг
+            // теряет video (см. parseAttachmentsArray per-item catch + parseVideoFull).
+            val videoPosts = posts.count { p ->
+                p.attachments?.any { it.type == "video" && it.video != null } == true
+            }
+            AppLog.i("VKApiClient", "wallGetExtended: owner=$ownerId filter=$filter rawItems=${items.size()} parsed=${posts.size} withVideo=$videoPosts total=$totalCount")
             WallGetExtendedResult(posts, profileNames, items.size(), totalCount)
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "wallGetExtended parse error", e)
