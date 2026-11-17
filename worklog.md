@@ -24604,3 +24604,39 @@ failedPhotos, не рвут весь батч — parity с null-веткой. �
 - initial Snapshot(...) дополнен authV1Enabled = false (sync с SovaPrefs default).
 
 Проверки: check-nested-comments OK; brace/paren delta (0,0) по всем 5 файлам.
+
+## 2026-11-17 — feat(donut): распознавание платных постов/видео (restriction) + честный paywall
+
+Пользователь дал снапшот группы с платными видео (Replay Vault, -237159961, папка «для донов»:
+2_Replay Vault.html + HAR 39MB). Требование: «чтобы в Пинок было видно, что пост/видео платное,
+и при попытке открыть не было молчаливой ошибки».
+
+### Реверс снапшота (суб-агенты: SCOUT/HUNTER/TRACER)
+- VK Donut paywall: у ПЛАТНОГО видео в объекте есть estriction{title:"Только для донов автора",
+  text, button:{action:"donat", title:"299 ₽/мес", action_url:"...?levelId=3516&w=donut_payment-..."},
+  blur:1, can_play:0, can_preview:0}. У бесплатных поля НЕТ, есть views/local_views.
+- post.is_donut у постов = false у всех — НЕ маркер доступности; решает restriction В НУТРИ вложения video.
+- API: donut.getPurchaseOffers / getCountContentInherited / donut.initializePayment (VK Bridge) /
+  pollPaymentStatus / mini_app_token (app_id=51528700). Уровни 299/499/999 ₽/мес.
+
+### Реализовано (коммит e8614c6, запушен)
+- Models.kt: Video.VideoRestriction (title/text/button/blur/can_play/can_preview) + isPaidVideo/paidTitle/paidActionUrl.
+- VKApiClient: парсинг restriction через БЕЗОПАСНЫЙ getObj (не роняет списки, если restriction не объект).
+- VideoThumbnail: замок поверх платного видео; при отсутствии постера — название/«Только для донов»
+  (раньше пост с платным видео выглядел пустым серым блоком).
+- VideoPlatformRouter: paywall-заглушка «Только для донов» с кнопками Оформить подписку / Назад.
+- PostCard: метка «Платный пост» (donut.is_donut || placeholder).
+
+### НЕ РЕШЕНО / ОТКРЫТЫЙ ВОПРОС
+«В группе физически НЕТ карточек постов, в которых есть видео» (видно и в логе устройства:
+wall.get 260KB, но карточки с видео отсутствуют). Исключено:
+- parseAttachmentsArray — try/catch на каждый аттачмент (пост не теряется);
+- сортировка #WALL-SORT — откачена, возвращён порядок с сервера;
+- небезопасный getAsJsonObject("restriction") — заменён на getObj.
+Остаточные гипотезы:
+1. VK прячет платные видео-посты от не-подписчика в wall.get (filter=all) — не отдаёт их в items вовсе;
+   тогда это серверное ограничение, НЕ баг приложения.
+2. Требуется проверить на устройстве с новой сборкой: приходят ли посты с video в items.
+Что дальше: проверить свежую сборку; если карточек так и нет — логировать raw items wall.get
+(количество постов с video) и сравнить с VK web; при необходимости использовать wall.get с другим
+filter или groups.getContentForTabs(tab=video).
