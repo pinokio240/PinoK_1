@@ -7,14 +7,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -127,14 +130,37 @@ fun VideoPlatformRouter(
         // EXTERNAL_IFRAME/INSTAGRAM ветки используют WebView/OkVideoRepository,
         // там setMediaItems неприменим (один embed URL на iframe).
         VideoPlatform.VK,
-        VideoPlatform.UNKNOWN -> VideoPlayerScreen(
-            video = video,
-            onBack = onBack,
-            onUserClick = onUserClick,
-            // #VIDEO-SERIES: контекст серии из VideoHolder (null = одиночное видео).
-            playlist = playlist,
-            startIndex = startIndex,
-        )
+        VideoPlatform.UNKNOWN -> {
+            // #DONUT-VIDEO (2026-11-17): платное видео (VK Donut) не открываем
+            // плеером (VK вернёт ошибку) — вместо этого показываем paywall-заглушку
+            // «Только для донов» с кнопкой «Оформить подписку» (если есть action_url)
+            // или «Открыть в браузере» (fallback).
+            if (video.isPaidVideo) {
+                PaidVideoPlaceholder(
+                    video = video,
+                    onBack = onBack,
+                    onOpenInBrowser = {
+                        val url = video.paidActionUrl ?: video.player ?: "https://vk.com/video${video.ownerId}_${video.id}"
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            AppLog.w(TAG, "PaidVideoPlaceholder: browser open failed: ${e.message}")
+                        }
+                    },
+                )
+                return
+            }
+            VideoPlayerScreen(
+                video = video,
+                onBack = onBack,
+                onUserClick = onUserClick,
+                // #VIDEO-SERIES: контекст серии из VideoHolder (null = одиночное видео).
+                playlist = playlist,
+                startIndex = startIndex,
+            )
+        }
 
         // FEED-FIX-4 (#349): OK-видео зависит от externalVideosEnabled (default true).
         // При externalEnabled=true: нативный путь (OkVideoRepository → ExoPlayer,
@@ -284,6 +310,97 @@ private fun ExternalVideosDisabledPlaceholder(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text("Открыть в браузере", color = Color.White, fontSize = 13.sp)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Платный пост/видео (VK Donut) — placeholder вместо плеера.
+ * Показывается когда видео имеет `restriction`/can_play=0 (VK Donut paywall).
+ * Не блокирует навигацию (кнопка «Назад»), даёт кнопку «Оформить подписку»
+ * (action_url) или «Открыть в браузере» (fallback).
+ */
+@Composable
+private fun PaidVideoPlaceholder(
+    video: Video,
+    onBack: () -> Unit,
+    onOpenInBrowser: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp),
+        ) {
+            Icon(
+                Icons.Outlined.Lock,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.padding(8.dp).size(32.dp),
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                video.paidTitle ?: "Только для донов",
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                video.restriction?.text
+                    ?: "Видео «${video.title.ifBlank { "без названия" }}» доступно по подписке автора.",
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 13.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Box(
+                modifier = Modifier
+                    .background(Color(0xFF2196F3), RoundedCornerShape(8.dp))
+                    .clickable { onOpenInBrowser() }
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (video.paidActionUrl != null) "Оформить подписку" else "Открыть в браузере",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                )
+            }
+            // #DONUT-PLACEHOLDER-BACK (2026-11-17): полноценная кнопка возврата
+            // НИЖЕ контента (а не плавающая иконка сверху-слева). Возврат — через
+            // системный back-стек (onBack из вызывающего экрана: сообщество/лента/пост).
+            Spacer(modifier = Modifier.height(20.dp))
+            Box(
+                modifier = Modifier
+                    .background(Color(0x66FFFFFF), RoundedCornerShape(8.dp))
+                    .clickable { onBack() }
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.padding(6.dp))
+                    Text(
+                        "Назад",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
                 }
             }
         }

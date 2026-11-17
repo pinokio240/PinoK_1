@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.Card
@@ -111,6 +112,21 @@ fun VideoThumbnail(
                 ) {
                     Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(22.dp))
                 }
+                // #DONUT-VIDEO-NOTHUMB: если у видео НЕТ постера (платное/недоступное
+                // VK не отдаёт image[]) — рисуем название поверх, чтобы пост не
+                // выглядел пустым серым блоком и было видно, что это за видео.
+                if (thumbUrl == null) {
+                    Text(
+                        text = if (video.isPaidVideo) video.paidTitle ?: "Только для донов" else video.title,
+                        color = Color.White,
+                        fontSize = if (compact) 12.sp else 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp),
+                    )
+                }
                 if (video.duration > 0) {
                     Box(
                         modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
@@ -123,6 +139,29 @@ fun VideoThumbnail(
                             color = Color.White,
                             fontSize = 11.sp,
                         )
+                    }
+                }
+                // #DONUT-VIDEO: платное видео — замок поверх превью.
+                // Клик НЕ блокируем: пользователь видит индикатор, но может открыть.
+                if (video.isPaidVideo) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.25f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier.size(32.dp)
+                                .background(Color.Black.copy(alpha = 0.6f), CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Outlined.Lock,
+                                contentDescription = video.paidTitle,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
                 // VISIBLE-MENU: видимая кнопка ⋮ поверх превью (compact).
@@ -187,6 +226,19 @@ fun VideoThumbnail(
                 ) {
                     Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(28.dp))
                 }
+                // #DONUT-VIDEO-NOTHUMB: название поверх пустого превью (non-compact).
+                if (thumbUrl == null) {
+                    Text(
+                        text = if (video.isPaidVideo) video.paidTitle ?: "Только для донов" else video.title,
+                        color = Color.White,
+                        fontSize = if (compact) 12.sp else 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp),
+                    )
+                }
                 if (video.duration > 0) {
                     Box(
                         modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp)
@@ -199,6 +251,29 @@ fun VideoThumbnail(
                             color = Color.White,
                             fontSize = 11.sp,
                         )
+                    }
+                }
+                // #DONUT-VIDEO: платное видео — замок поверх превью.
+                // Клик НЕ блокируем: пользователь видит индикатор, но может открыть.
+                if (video.isPaidVideo) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.25f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier.size(32.dp)
+                                .background(Color.Black.copy(alpha = 0.6f), CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Outlined.Lock,
+                                contentDescription = video.paidTitle,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
                 // VISIBLE-MENU: видимая кнопка ⋮ поверх превью (non-compact).

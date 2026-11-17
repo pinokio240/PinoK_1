@@ -299,6 +299,14 @@ data class Video(
     @SerializedName("track_code")      val trackCode: String? = null,
     @SerializedName("type")            val type: String? = null,
     @SerializedName("platform")        val platform: String? = null,
+    // #DONUT-VIDEO (2026-11-17, из снапшота Replay Vault): платное видео.
+    // VK присылает объект restriction ТОЛЬКО для платных видео:
+    // { "title":"Только для донов автора", "text":"...", "button":{action,title,action_url},
+    //   "blur":1, "can_play":0, "can_preview":0 }. У свободных видео поле отсутствует.
+    @SerializedName("restriction")     val restriction: VideoRestriction? = null,
+    @SerializedName("can_play")        val canPlay: Int? = null,
+    @SerializedName("can_preview")     val canPreview: Int? = null,
+    @SerializedName("blur")            val blur: Int? = null,
     @SerializedName("added")           val added: Int? = null,
     @SerializedName("completely_loaded") val completelyLoaded: Int? = null,
     // Музыка клипа (audio-трек, играющий в фоне).
@@ -327,6 +335,23 @@ data class Video(
         @SerializedName("width")  val width: Int,
         @SerializedName("height") val height: Int,
     )
+
+    /** #DONUT-VIDEO: платное видео (VK Donut paywall). Поле есть ТОЛЬКО у платных. */
+    data class VideoRestriction(
+        @SerializedName("title")   val title: String? = null,       // «Только для донов автора»
+        @SerializedName("text")    val text: String? = null,        // «Видео доступно с уровня ...»
+        @SerializedName("button")  val button: RestrictionButton? = null,
+        @SerializedName("blur")    val blur: Int? = null,
+        @SerializedName("can_play")    val canPlay: Int? = null,
+        @SerializedName("can_preview") val canPreview: Int? = null,
+    ) {
+        /** Кнопка paywall: action=donat, title=«299 ₽/мес», action_url=ссылка оформления. */
+        data class RestrictionButton(
+            @SerializedName("action")     val action: String? = null,
+            @SerializedName("title")      val title: String? = null,
+            @SerializedName("action_url") val actionUrl: String? = null,
+        )
+    }
 
     /** Репосты клипа (для счётчика share). */
     data class Reposts(
@@ -376,6 +401,15 @@ data class Video(
     // §37.9: canEdit/canDelete для контекстного меню «Редактировать»/«Удалить».
     val canEditClip: Boolean get() = canEdit == 1
     val canDeleteClip: Boolean get() = canDelete == 1
+    // #DONUT-VIDEO (2026-11-17): платное видео. Маркер = поле restriction (есть
+    // только у платных) ИЛИ can_play=0/can_preview=0/blur=1. Если пост платный,
+    // но VK не отдал restriction — canPlay==0 тоже сигнал.
+    val isPaidVideo: Boolean get() =
+        restriction != null || canPlay == 0 || canPreview == 0
+    /** Текст плашки «Только для донов …» из restriction (или generic). */
+    val paidTitle: String? get() = restriction?.title ?: "Только для донов"
+    /** Ссылка оформления подписки (action_url), если есть. */
+    val paidActionUrl: String? get() = restriction?.button?.actionUrl
     // P0.19 #CLIP-DASH-BESTURL (2026-10): лучший URL для прямого воспроизведения.
     // Приоритет: прогрессивные mp4 (1080→240) → HLS-манифест (hls_ondemand, hls)
     // → hls_fmp4 (fMP4 HLS) → DASH-манифесты (dash_ondemand, dash, dash_sep,

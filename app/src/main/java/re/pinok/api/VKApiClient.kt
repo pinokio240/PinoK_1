@@ -10998,6 +10998,25 @@ class VKApiClient(
             files = filesMap,
             accessKey = o.get("access_key")?.takeIf { !it.isJsonNull }?.asString,
             image = parseVideoThumbs(o),
+            restriction = getObj(o, "restriction")?.let { r ->
+                re.pinok.data.model.Video.VideoRestriction(
+                    title = safeString(r.get("title")),
+                    text = safeString(r.get("text")),
+                    button = getObj(r, "button")?.let { b ->
+                        re.pinok.data.model.Video.VideoRestriction.RestrictionButton(
+                            action = safeString(b.get("action")),
+                            title = safeString(b.get("title")),
+                            actionUrl = safeString(b.get("action_url")),
+                        )
+                    },
+                    blur = safeIntNullable(r.get("blur")),
+                    canPlay = safeIntNullable(r.get("can_play")),
+                    canPreview = safeIntNullable(r.get("can_preview")),
+                )
+            },
+            canPlay = o.get("can_play")?.takeIf { !it.isJsonNull }?.asInt,
+            canPreview = o.get("can_preview")?.takeIf { !it.isJsonNull }?.asInt,
+            blur = o.get("blur")?.takeIf { !it.isJsonNull }?.asInt,
         ).withDetectedPlatform()
     }
 
@@ -14227,6 +14246,26 @@ class VKApiClient(
             trackCode = safeString(o.get("track_code")),
             type = safeString(o.get("type")) ?: "video",
             platform = safeString(o.get("platform")),
+            // #DONUT-VIDEO: платное видео — restriction{title,text,button,blur,can_play,can_preview}
+            restriction = getObj(o, "restriction")?.let { r ->
+                re.pinok.data.model.Video.VideoRestriction(
+                    title = safeString(r.get("title")),
+                    text = safeString(r.get("text")),
+                    button = getObj(r, "button")?.let { b ->
+                        re.pinok.data.model.Video.VideoRestriction.RestrictionButton(
+                            action = safeString(b.get("action")),
+                            title = safeString(b.get("title")),
+                            actionUrl = safeString(b.get("action_url")),
+                        )
+                    },
+                    blur = safeIntNullable(r.get("blur")),
+                    canPlay = safeIntNullable(r.get("can_play")),
+                    canPreview = safeIntNullable(r.get("can_preview")),
+                )
+            },
+            canPlay = safeIntNullable(o.get("can_play")),
+            canPreview = safeIntNullable(o.get("can_preview")),
+            blur = safeIntNullable(o.get("blur")),
             added = safeIntNullable(o.get("added")),
             completelyLoaded = safeIntNullable(o.get("completely_loaded")),
             musicInfo = musicInfo,

@@ -271,7 +271,8 @@ fun CommunityScreen(
             val offset = (cursor as? ServerOffset)?.offset ?: 0
             val wp = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = offset)
             signerNames = signerNames + wp.profileNames
-            val page = wp.posts.filter { it.id > 0 && it.ownerId != 0L }
+            val page = wp.posts
+                .filter { it.id > 0 && it.ownerId != 0L }
             // Конец: rawCount==0 (пустой ответ) ИЛИ offset+rawCount >= totalCount.
             val next = if (wp.rawCount == 0 || (wp.totalCount > 0 && offset + wp.rawCount >= wp.totalCount))
                 null else ServerOffset(offset + wp.rawCount)

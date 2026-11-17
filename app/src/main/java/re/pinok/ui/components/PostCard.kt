@@ -211,6 +211,23 @@ fun PostCard(
                     ),
                 )
             }
+            // #DONUT-BADGE (2026-11-17): платный пост (donut.is_donut) — просто
+            // метка, чтобы пользователь знал: контент доступен по подписке.
+            // Клики НЕ блокируем (открытие может дать ошибку, но это стандрат VK).
+            val isPaidPost = post.isDonut || donut?.placeholder != null
+            if (isPaidPost) {
+                Text(
+                    text = "Платный пост",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(
+                        start = 12.dp,
+                        end = 12.dp,
+                        top = if (post.isAd && showAdBadge || (postType != null && postType in listOf("suggest", "suggested"))) 0.dp else 8.dp,
+                    ),
+                )
+            }
             // ─── HEADER: аватар + имя (+verified/подпись) + подписка + закладка + ⋮ ───
             Row(
                 modifier = Modifier
