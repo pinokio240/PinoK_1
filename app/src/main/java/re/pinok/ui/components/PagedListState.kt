@@ -72,6 +72,12 @@ class ServerNextFrom(var value: String?) : PagedCursor
 class PagedListState<T : Any>(
     private val fetcher: suspend (PagedCursor?) -> Pair<List<T>, PagedCursor?>,
     private val keyOf: (T) -> Any = { it.hashCode() },
+    // #WALL-SORT (2026-11-17): опциональный сортировщик аккумулятивного списка.
+    // Применяется ПОСЛЕ каждой догрузки (loadFirst/loadMore) к объединённому
+    // списку — обеспечивает стабильный порядок (например, по дате убывания)
+    // даже если разные страницы пришли от разных API с разным порядком
+    // (owners.getMainTab page 1 + wall.get page 2+). null = порядок сервера.
+    private val sorter: ((List<T>) -> List<T>)? = null,
 ) {
     var items by mutableStateOf<List<T>>(emptyList())
         private set
@@ -100,7 +106,9 @@ class PagedListState<T : Any>(
         error = null
         try {
             val (firstPage, newCursor) = fetcher(null)
-            items = firstPage.distinctBy { keyOf(it) }
+            // #WALL-SORT: сортируем первую страницу (если sorter задан) —
+            // например, owners.getMainTab может вернуть ads-вставку в середине.
+            items = firstPage.distinctBy { keyOf(it) }.let { s -> sorter?.invoke(s) ?: s }
             cursor = newCursor
             // Конец = серверный курсор пришёл пустым (а не size < pageSize).
             endReached = newCursor == null
@@ -129,7 +137,11 @@ class PagedListState<T : Any>(
             // Дедупликация против уже загруженных + от случайных дублей страницы.
             val newItems = page.filter { np -> items.none { keyOf(it) == keyOf(np) } }
             if (newItems.isNotEmpty()) {
+                // #WALL-SORT: после merge новой страницы — пересортируем весь
+                // список. Иначе page 2 (wall.get order) append'ится после page 1
+                // (owners.getMainTab order) → порядок ломается (не newest-first).
                 items = (items + newItems).distinctBy { keyOf(it) }
+                    .let { s -> sorter?.invoke(s) ?: s }
             }
             cursor = newCursor
             // Конец списка задаёт ТОЛЬКО серверный курсор (newCursor == null).
@@ -174,9 +186,11 @@ class PagedListState<T : Any>(
 fun <T : Any> rememberPagedListState(
     fetcher: suspend (PagedCursor?) -> Pair<List<T>, PagedCursor?>,
     keyOf: (T) -> Any = { it.hashCode() },
+    // #WALL-SORT: опциональный сортировщик (см. PagedListState). null = порядок сервера.
+    sorter: ((List<T>) -> List<T>)? = null,
     rememberKey: Any = Unit,
 ): PagedListState<T> = remember(rememberKey) {
-    PagedListState(fetcher = fetcher, keyOf = keyOf)
+    PagedListState(fetcher = fetcher, keyOf = keyOf, sorter = sorter)
 }
 
 /**

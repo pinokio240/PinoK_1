@@ -24764,3 +24764,36 @@ VideoPlayerScreen.kt:
 - Если видео на паузе → back просто закрывает (onBack).
 
 Проверки: check-nested-comments OK; brace delta (0,0).
+
+## 2026-11-17 — fix(wall): #WALL-SORT — посты сообщества newest-first (по дате убывания)
+
+Пользователь: «в сообществах посты не отображаются сначала новые потом старые».
+
+### Глубокий анализ
+Поток стены CommunityScreen:
+- Page 1 (offset==0): owners.getMainTab (unified API web.api.vk.ru) — mixed items
+  (type:"video", type:"post", type:"ads").
+- Page 2+ (offset>0): wallGetExtended (classic wall.get, filter=all) — posts only.
+- PagedListState.loadMore: items = (items + newItems).distinctBy{keyOf} — append без сортировки.
+
+HAR (m.7z, owners.getMainTab response) — порядок items по date:
+  1794768119 (video), 1794767961 (video), 1794744438 (post), 1794685263, 1794684300,
+  0 (ads), 1794657600, 1794654000, 1794650400, 1794560402.
+→ owners.getMainTab отдаёт DESCENDING by date (newest first), но с ads-вставкой в середине.
+→ wall.get (page 2+) тоже newest-first, НО другой набор/порядок (filter=all includes
+  suggested, другой order чем owners.getMainTab's curated feed).
+
+Корень: merge page 1 (owners order) + page 2 (wall order) без сортировки → итоговый
+список НЕ строго newest-first (page 2 posts append'ятся после page 1 даже если новее).
+
+### Фикс
+- PagedListState.kt: +sorter: ((List<T>)->List<T>)? = null параметр. Применяется
+  в loadFirst (after distinctBy) и loadMore (after merge+distinctBy). null = порядок
+  сервера (совместимость). rememberPagedListState: +sorter параметр.
+- CommunityScreen.kt: sorter = { list -> list.sortedByDescending { it.date } } —
+  после каждой догрузки весь список пересортируется по дате убывания.
+
+Эффект: посты всегда newest-first, независимо от того, что owners.getMainTab (page 1)
+и wall.get (page 2+) вернули в разном порядке. Ads уже skip'уется в ownersGetMainTab.
+
+Проверки: check-nested-comments OK; brace delta (0,0) по обоим файлам.

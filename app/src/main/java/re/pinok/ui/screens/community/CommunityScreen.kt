@@ -299,6 +299,11 @@ fun CommunityScreen(
             page to next
         },
         keyOf = { p -> "${p.ownerId}_${p.id}" },
+        // #WALL-SORT (2026-11-17): сортировка по дате убывания (newest first).
+        // Page 1 (owners.getMainTab) и page 2+ (wall.get) — разные API с разным
+        // порядком; без сортировки merge ломает chronology (ads-вставки, video-
+        // посты впереди). sortedByDescending по date — стабильный newest-first.
+        sorter = { list -> list.sortedByDescending { it.date } },
         rememberKey = groupId,
     )
     val listState = rememberLazyListState()
