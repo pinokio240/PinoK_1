@@ -140,6 +140,12 @@ data class WallGetExtendedResult(
      *  Конец пагинации: offset + rawCount >= totalCount. Без этого — ложный
      *  конец если VK вернёт < pageSize на промежуточной странице. */
     val totalCount: Int = 0,
+    /** #OWNERS-CURSOR (2026-11-17): cursor для следующей страницы owners.getMainTab
+     *  (response.next_from). null = конец ленты (сервер не вернул next_from).
+     *  Используется CommunityScreen для cursor-based пагинации (вместо offset) —
+     *  owners.getMainTab возвращает donut-посты на ВСЕХ страницах, а classic
+     *  wall.get (offset-based) — только на первой (donut скрыт от не-подписчика). */
+    val nextFrom: String? = null,
 )
 
 data class ClipsFeedResult(

@@ -127,6 +127,7 @@ import re.pinok.ui.components.PagingTrigger
 import re.pinok.ui.components.PostCard
 import re.pinok.ui.components.PostMenuItem
 import re.pinok.ui.components.ScrollToTopFab
+import re.pinok.ui.components.PagedCursor
 import re.pinok.ui.components.ServerOffset
 import re.pinok.ui.components.ServerNextFrom
 import re.pinok.ui.components.rememberPagedListState
@@ -268,34 +269,59 @@ fun CommunityScreen(
     // Только «Клипы» (short_videos) работают через getContentForTabs.
     val wallState = rememberPagedListState<Post>(
         fetcher = { cursor ->
+            // #OWNERS-CURSOR (2026-11-17): cursor-based пагинация через
+            // owners.getMainTab (web.api.vk.ru) на ВСЕХ страницах — не только
+            // первой. Раньше page 2+ шла через classic wall.get (offset-based),
+            // который НЕ отдаёт donut-посты не-подписчику → в группах с множеством
+            // платного контента (Replay Vault) стена обрывалась после page 1
+            // (видны только free-посты, donut-видео отсутствовали).
+            // owners.getMainTab: request-param `start_from` = cursor предыдущей
+            // страницы (response.next_from). HAR entry 27→377: start_from переходит.
+            // Fallback: если owners.getMainTab на ПЕРВОЙ странице вернёт пусто
+            // (метод не поддерживается/сеть) — переключаемся на wall.get
+            // (offset-based) для всех страниц. Cursor-type определяет режим:
+            //   null / ServerNextFrom → owners.getMainTab (cursor)
+            //   ServerOffset          → wall.get (offset, fallback mode)
+            val nextFrom = (cursor as? ServerNextFrom)?.value
             val offset = (cursor as? ServerOffset)?.offset ?: 0
-            // #VIDEO-CARDS-RESTORE: первая страница стены сообщества — unified API
-            // owners.getMainTab (web.api.vk.ru), который возвращает video-посты
-            // (type:"video" — пост, состоящий из видео), отсутствующие в classic
-            // wall.get. owners.getMainTab — cursor-based (response.next_from),
-            // offset НЕ поддерживается (HAR /tmp/owners_request.json — в postData
-            // нет offset), а WallGetExtendedResult не несёт курсор → для пагинации
-            // (offset>0) используем classic wall.get (offset-based), иначе при
-            // offset>0 owners.getMainTab вернул бы ТУ ЖЕ первую страницу → дубли
-            // (либо пусто после дедупа) и бесконечная догрузка. Fallback на wall.get
-            // и для offset==0 если owners.getMainTab вернёт пусто (метод не
-            // поддерживается/ошибка сети).
-            var wp = if (offset == 0) {
-                var res = app.apiClient.ownersGetMainTab(ownerId = -groupId, count = 30, offset = offset)
-                if (res.posts.isEmpty() && res.rawCount == 0) {
-                    AppLog.w("CommunityScreen", "ownersGetMainTab empty — fallback to wallGetExtended")
-                    res = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = offset)
+            val wp = when {
+                cursor == null -> {
+                    // Первая страница: owners.getMainTab, fallback на wall.get.
+                    var res = app.apiClient.ownersGetMainTab(ownerId = -groupId, count = 30, nextFrom = null)
+                    if (res.posts.isEmpty() && res.rawCount == 0 && res.nextFrom == null) {
+                        AppLog.w("CommunityScreen", "ownersGetMainTab empty — fallback to wallGetExtended")
+                        res = app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = 0)
+                    }
+                    res
                 }
-                res
-            } else {
-                app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = offset)
+                nextFrom != null -> {
+                    // Page 2+ owners.getMainTab (cursor mode).
+                    app.apiClient.ownersGetMainTab(ownerId = -groupId, count = 30, nextFrom = nextFrom)
+                }
+                else -> {
+                    // Page 2+ wall.get (fallback offset mode).
+                    app.apiClient.wallGetExtended(ownerId = -groupId, count = 30, offset = offset)
+                }
             }
             signerNames = signerNames + wp.profileNames
             val page = wp.posts
                 .filter { it.id > 0 && it.ownerId != 0L }
-            // Конец: rawCount==0 (пустой ответ) ИЛИ offset+rawCount >= totalCount.
-            val next = if (wp.rawCount == 0 || (wp.totalCount > 0 && offset + wp.rawCount >= wp.totalCount))
-                null else ServerOffset(offset + wp.rawCount)
+            // Следующий курсор зависит от режима:
+            //  - owners.getMainTab (nextFrom есть) → ServerNextFrom(nextFrom); null = конец.
+            //  - wall.get (offset mode) → ServerOffset(offset+rawCount); null если rawCount==0
+            //    ИЛИ offset+rawCount >= totalCount.
+            val next: PagedCursor? = when {
+                wp.nextFrom != null -> ServerNextFrom(wp.nextFrom)
+                cursor is ServerNextFrom -> null  // owners mode закончился (nextFrom null)
+                cursor == null && page.isNotEmpty() && wp.nextFrom == null && wp.rawCount > 0 -> {
+                    // Первая страница через owners.getMainTab вернула posts, но nextFrom
+                    // null → конец ленты (мало постов). НЕ падаем в wall.get fallback.
+                    null
+                }
+                wp.rawCount == 0 -> null
+                wp.totalCount > 0 && offset + wp.rawCount >= wp.totalCount -> null
+                else -> ServerOffset(offset + wp.rawCount)
+            }
             page to next
         },
         keyOf = { p -> "${p.ownerId}_${p.id}" },

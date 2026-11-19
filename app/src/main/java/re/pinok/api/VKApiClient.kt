@@ -18269,6 +18269,10 @@ class VKApiClient(
         ownerId: Long,
         count: Int = 20,
         offset: Int = 0,
+        // #OWNERS-CURSOR (2026-11-17): cursor следующей страницы (response.next_from
+        // предыдущего вызова). Передаётся как request-param `start_from` (HAR:
+        // entry 27/377 — start_from="mgER..."). null = первая страница.
+        nextFrom: String? = null,
     ): WallGetExtendedResult {
         if (isOffline()) return WallGetExtendedResult(emptyList(), emptyMap())
         val args = mutableMapOf(
@@ -18278,9 +18282,13 @@ class VKApiClient(
             // #API-RU (2026-11-17): fields из HAR /tmp/owners_request.json.
             "fields" to "photo_base,sex,first_name_dat,last_name_dat,video_files,verified,trending,friend_status,first_name_gen,first_name_acc,emoji_status,image_status,can_write_private_message,can_message,has_unseen_stories,is_government_organization",
         )
-        // offset НЕ добавляем: HAR /tmp/owners_request.json не содержит offset в
-        // postData — owners.getMainTab cursor-based (response.next_from), offset
-        // сервером игнорируется. Параметр оставлен в сигнатуре для совместимости.
+        // #OWNERS-CURSOR: start_from — cursor для page 2+ (HAR entry 27/377).
+        // offset НЕ добавляем: owners.getMainTab cursor-based (response.next_from),
+        // offset сервером игнорируется. Параметр offset оставлен в сигнатуре для
+        // совместимости со старыми call-sites.
+        if (!nextFrom.isNullOrBlank()) {
+            args["start_from"] = nextFrom
+        }
         val json = call("owners.getMainTab", args, forceWebGateway = true)
             ?: return WallGetExtendedResult(emptyList(), emptyMap())
         return try {
@@ -18361,8 +18369,11 @@ class VKApiClient(
             // totalCount: owners.getMainTab НЕ возвращает response.count/
             // total_count (HAR /tmp/owners_getMainTab_response.json — оба None).
             val totalCount = safeInt(resp.get("count"))
-            AppLog.i("VKApiClient", "ownersGetMainTab: owner=$ownerId rawItems=${items.size()} parsed=${posts.size} videoItems=$videoItems postItems=$postItems")
-            WallGetExtendedResult(posts, profileNames, items.size(), totalCount)
+            // #OWNERS-CURSOR: response.next_from — cursor для следующей страницы.
+            // null/пусто = конец ленты. HAR entry 27: next_from="mgEaAs5...".
+            val respNextFrom = safeString(resp.get("next_from"))?.takeIf { it.isNotBlank() }
+            AppLog.i("VKApiClient", "ownersGetMainTab: owner=$ownerId start_from=${nextFrom?.take(20)} rawItems=${items.size()} parsed=${posts.size} videoItems=$videoItems postItems=$postItems nextFrom=${respNextFrom?.take(20)}")
+            WallGetExtendedResult(posts, profileNames, items.size(), totalCount, respNextFrom)
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "ownersGetMainTab parse error", e)
             WallGetExtendedResult(emptyList(), emptyMap())

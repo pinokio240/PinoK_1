@@ -24797,3 +24797,40 @@ HAR (m.7z, owners.getMainTab response) — порядок items по date:
 и wall.get (page 2+) вернули в разном порядке. Ads уже skip'уется в ownersGetMainTab.
 
 Проверки: check-nested-comments OK; brace delta (0,0) по обоим файлам.
+
+## 2026-11-17 — fix(wall): #OWNERS-CURSOR — cursor-based пагинация owners.getMainTab на ВСЕХ страницах
+
+Пользователь: «успех по датам, но vk.ru/replayvault не могу просмотреть всю стену —
+может баг из-за множественного платного контента блокирует пагинацию?»
+
+### Корень
+owners.getMainTab (unified API web.api.vk.ru) возвращает donut-посты на всех страницах.
+Classic wall.get (api.vk.ru, offset-based) НЕ отдаёт donut-посты не-подписчику. Раньше:
+page 1 → owners.getMainTab (с donut), page 2+ → wall.get (БЕЗ donut). В группах с
+множеством платного контента (Replay Vault) page 2+ возвращала только free-посты →
+donut-видео отсутствовали, стена казалась обрывочной.
+
+### Реверс HAR (m.7z, owners.getMainTab)
+- Request cursor param: `start_from` (entry 27: start_from="mgERAs5jOWU...", entry 377:
+  start_from="mgERAs4cR0U...").
+- Response cursor: `next_from` (entry 27 resp: next_from="mgEaAs5jOWU...").
+- Поток: page 1 (no start_from) → resp next_from=CURSOR1 → page 2 (start_from=CURSOR1)
+  → resp next_from=CURSOR2 → ... пока next_from пустой.
+
+### Фикс (3 файла)
+- VKApiResponseModels.kt: WallGetExtendedResult +val nextFrom: String? = null
+  (cursor следующей страницы).
+- VKApiClient.ownersGetMainTab: +nextFrom: String? = null param → args["start_from"]
+  = nextFrom (если непустой). Парсит response.next_from → result.nextFrom. Diag-log
+  включает start_from/nextFrom.
+- CommunityScreen fetcher: cursor-based через ServerNextFrom для owners.getMainTab
+  на ВСЕХ страницах. when(cursor): null → page 1 owners.getMainTab(nextFrom=null)
+  с fallback на wallGetExtended если пусто; ServerNextFrom → page 2+ owners.getMainTab
+  (nextFrom=cursor.value); ServerOffset → wall.get (fallback offset mode). next cursor:
+  ServerNextFrom(wp.nextFrom) если есть; null = конец. PagedCursor import добавлен.
+
+### Эффект
+Стена сообщества грузится ЦЕЛИКОМ через owners.getMainTab (cursor-based) — donut-посты
+на всех страницах. Fallback на wall.get только если owners.getMainTab не поддерживается.
+
+Проверки: check-nested-comments OK; brace delta (0,0) по 3 файлам.
