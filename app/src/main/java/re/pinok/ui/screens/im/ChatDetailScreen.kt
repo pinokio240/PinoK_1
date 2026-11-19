@@ -127,6 +127,12 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PictureAsPdf
+// #PLATFORM-ICON: иконки устройств для last_seen.platform рядом с именем отправителя.
+import androidx.compose.material.icons.outlined.PhoneAndroid
+import androidx.compose.material.icons.outlined.PhoneIphone
+import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material.icons.outlined.DevicesOther
+import androidx.compose.material.icons.outlined.TabletMac
 import androidx.compose.material.icons.automirrored.outlined.Article
 // #CHANNEL-POST-UI (2026-10-04): иконки статуса канального поста — «глаз»
 // просмотров (снапшот web vkuiIcon view_12), иконка комментариев
@@ -6476,6 +6482,29 @@ private fun MessageBubble(
                             onClick = { onUserClick(message.fromId) },
                         ),
                     )
+                    // #PLATFORM-ICON (2026-11-17): иконка устройства отправителя
+                    // (Android/iPhone/iPad/Computer) из last_seen.platform. Зелёная
+                    // если online, серая если оффлайн. VK platform codes: 4=Android,
+                    // 2=iPhone, 3=iPad, 6=Windows, 7=web(full), 1=mobile web, 5=WinPhone.
+                    val lsPlatform = senderProfile?.lastSeen?.platform
+                    if (lsPlatform != null) {
+                        Spacer(Modifier.width(3.dp))
+                        val pIcon = when (lsPlatform) {
+                            4 -> Icons.Outlined.PhoneAndroid
+                            2 -> Icons.Outlined.PhoneIphone
+                            3 -> Icons.Outlined.TabletMac
+                            6, 7 -> Icons.Outlined.Computer
+                            else -> Icons.Outlined.DevicesOther
+                        }
+                        Icon(
+                            imageVector = pIcon,
+                            contentDescription = null,
+                            tint = if (senderProfile?.online == 1)
+                                MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(12.dp),
+                        )
+                    }
                     // P0.46-reactions-inline: VK web PeerTitle__icon — маленькая иконка
                     // реакции рядом с именем автора (если у сообщения есть реакция).
                     // VK web: <div class="StatusIcon--size-14 PeerTitle__icon">

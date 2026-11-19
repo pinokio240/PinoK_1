@@ -24834,3 +24834,30 @@ donut-видео отсутствовали, стена казалась обр�
 на всех страницах. Fallback на wall.get только если owners.getMainTab не поддерживается.
 
 Проверки: check-nested-comments OK; brace delta (0,0) по 3 файлам.
+
+## 2026-11-17 — feat(im): #PLATFORM-ICON — иконка устройства отправителя рядом с именем
+
+Пользователь: «в мессенджере над сообщением собеседника появляется вопросительный
+знак — что это? У имени нужно добавить значок устройства (Android/Apple/comпьютер)».
+
+### Анализ «?» над сообщением
+«?» — это аватар-плейсхолдер (24dp круг) когда senderProfile не загружен (нет фото +
+нет имени): senderName.take(1).ifBlank { "?" }. Появляется для отправителей, чей профиль
+отсутствует в profiles map (редкий edge-case — пользователь покинул чат).
+
+### Platform icon — реализация
+Проблема: UserProfile.lastSeen НЕ парсился в чате:
+- messagesGetHistoryWithProfiles: fields НЕ содержал last_seen, парсинг НЕ извлекал lastSeen.
+- usersGetByIds: fields СОДЕРЖАЛ last_seen, но парсинг НЕ извлекал lastSeen.
+
+Фикс:
+- VKApiClient.messagesGetHistoryWithProfiles: +last_seen в fields, +парсинг lastSeen{time,platform}.
+- VKApiClient.usersGetByIds: +парсинг lastSeen (fields уже содержал last_seen).
+- ChatDetailScreen: после имени отправителя — Icon устройства (12dp) из last_seen.platform:
+  4=PhoneAndroid, 2=PhoneIphone, 3=TabletMac, 6/7=Computer, else=DevicesOther.
+  tint: primary (зелёный) если online==1, onSurfaceVariant(0.6) если оффлайн.
+  +imports PhoneAndroid/PhoneIphone/Computer/DevicesOther/TabletMac.
+
+VK platform codes: 1=mobile web, 2=iPhone, 3=iPad, 4=Android, 5=WinPhone, 6=Windows, 7=web.
+
+Проверки: check-nested-comments OK; brace delta (0,0) по обоим файлам.

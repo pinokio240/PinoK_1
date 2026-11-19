@@ -1437,7 +1437,7 @@ class VKApiClient(
             "count" to count.toString(),
             "rev" to "0",
             "extended" to "1",
-            "fields" to "photo_100,photo_200,online,first_name,last_name,name",
+            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen",
         )
         if (offset > 0) args["offset"] = offset.toString()
         val json = call("messages.getHistory", args) ?: return emptyList()
@@ -1527,7 +1527,7 @@ class VKApiClient(
             "count" to count.toString(),
             "rev" to "0",
             "extended" to "1",
-            "fields" to "photo_100,photo_200,online,first_name,last_name,name",
+            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen",
         )
         if (offset > 0) args["offset"] = offset.toString()
         // #IM-EMPTY-HONEST: null у call() = запрос не выполнен (VK API error,
@@ -1567,6 +1567,14 @@ class VKApiClient(
                     photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
                     photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
                     online = o.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    // #PLATFORM-ICON: last_seen{time,platform} — platform определяет
+                    // устройство (4=Android, 2/3=iPhone/iPad, 6/7=desktop, 1=mobile web).
+                    lastSeen = o.getAsJsonObject("last_seen")?.let { ls ->
+                        UserProfile.LastSeen(
+                            time = ls.get("time")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                            platform = ls.get("platform")?.takeIf { !it.isJsonNull }?.asInt,
+                        )
+                    },
                 )
             }
             resp.getAsJsonArray("groups")?.forEach { el ->
@@ -9702,6 +9710,14 @@ class VKApiClient(
                     photo200 = obj.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
                     online = obj.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                     verified = obj.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    // #PLATFORM-ICON: fields уже содержит last_seen — парсим platform
+                    // для иконки устройства рядом с именем.
+                    lastSeen = obj.getAsJsonObject("last_seen")?.let { ls ->
+                        UserProfile.LastSeen(
+                            time = ls.get("time")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                            platform = ls.get("platform")?.takeIf { !it.isJsonNull }?.asInt,
+                        )
+                    },
                 )
             }
             result
