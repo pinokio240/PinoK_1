@@ -127,12 +127,7 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PictureAsPdf
-// #PLATFORM-ICON: иконки устройств для last_seen.platform рядом с именем отправителя.
-import androidx.compose.material.icons.outlined.PhoneAndroid
-import androidx.compose.material.icons.outlined.PhoneIphone
-import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.outlined.DevicesOther
-import androidx.compose.material.icons.outlined.TabletMac
+// #PLATFORM-ICON: иконки устройств вынесены в reusable PlatformDeviceIcon (ui/components/PlatformIcon.kt).
 import androidx.compose.material.icons.automirrored.outlined.Article
 // #CHANNEL-POST-UI (2026-10-04): иконки статуса канального поста — «глаз»
 // просмотров (снапшот web vkuiIcon view_12), иконка комментариев
@@ -279,6 +274,8 @@ import re.pinok.realtime.LongPollEvent
 import re.pinok.ui.components.ForwardDialog
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
+import re.pinok.ui.components.PlatformDeviceIcon
+import re.pinok.ui.components.platformIconData
 import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.ui.components.VideoMessageShapes
 // MULTI-SELECT-ATTACH: buildVkAttachment — единый сборщик attachment-строки
@@ -659,6 +656,36 @@ private const val MSG_TEXT_LIMIT = 4096
 
 /** P3.6: состояние dual send/mic button. */
 private enum class SendButtonState { SUBMIT, MIC, EDIT, LOADING, LIMIT }
+
+/**
+ * #PLATFORM-ICON (2026-11-17): enrich профилей чата last_seen'ом.
+ * messages.getHistory extended=1 НЕ отдаёт last_seen в profiles[] (VK игнорирует
+ * fields=last_seen для этого метода) → UserProfile.lastSeen null → иконка
+ * устройства не рисуется. Добираем через users.get(fields=last_seen) для ID без
+ * lastSeen. Слитие безопасное: заменяем только если enriched-профиль имеет
+ * lastSeen (не теряем оригинальные фото/имя).
+ */
+private suspend fun enrichProfilesWithPlatform(
+    apiClient: re.pinok.api.VKApiClient,
+    profiles: Map<Long, UserProfile>,
+): Map<Long, UserProfile> {
+    val missingIds = profiles.values
+        .filter { it.id > 0 && it.lastSeen == null }
+        .map { it.id }
+        .distinct()
+    if (missingIds.isEmpty()) return profiles
+    return try {
+        val enriched = apiClient.usersGetByIds(missingIds)
+        val merged = profiles.toMutableMap()
+        enriched.forEach { (id, profile) ->
+            if (profile.lastSeen != null) merged[id] = profile
+        }
+        merged
+    } catch (e: Exception) {
+        AppLog.w("ChatDetailScreen", "enrichProfilesWithPlatform failed: ${e.message}")
+        profiles
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -2507,7 +2534,7 @@ fun ChatDetailScreen(
                 val fresh = result.messages.distinctBy { it.id }
                 if (fresh.isNotEmpty() || result.failure == null) {
                     messages = fresh
-                    chatProfiles = result.profiles
+                    chatProfiles = enrichProfilesWithPlatform(app.apiClient, result.profiles)
                     if (fresh.size < pageSize) endReached = true
                     channelWallFallback = true
                     channelPostsError = null
@@ -2576,7 +2603,7 @@ fun ChatDetailScreen(
                             "failure=${ch.failure} peerId=$peerId filter=$channelFeedFilter")
                     if (ch.messages.isNotEmpty()) {
                         messages = ch.messages
-                        chatProfiles = ch.profiles
+                        chatProfiles = enrichProfilesWithPlatform(app.apiClient, ch.profiles)
                         if (ch.messages.size < pageSize) endReached = true
                         channelHistoryMode = true
                         channelWallFallback = true
@@ -3269,7 +3296,7 @@ fun ChatDetailScreen(
             // #74: используем messagesGetHistoryWithProfiles — возвращает профили для аватарок
             val result = app.apiClient.messagesGetHistoryWithProfiles(peerId, count = pageSize)
             messages = result.messages.distinctBy { it.id }
-            chatProfiles = result.profiles
+            chatProfiles = enrichProfilesWithPlatform(app.apiClient, result.profiles)
             if (result.messages.size < pageSize) endReached = true
             if (result.messages.isEmpty()) {
                 // #IM-EMPTY-HONEST (волна 36): failure от VKApiClient имеет
@@ -3582,7 +3609,7 @@ fun ChatDetailScreen(
                 )
                 if (ch.messages.isNotEmpty()) {
                     messages = ch.messages
-                    chatProfiles = ch.profiles
+                    chatProfiles = enrichProfilesWithPlatform(app.apiClient, ch.profiles)
                     if (ch.messages.size < pageSize) endReached = true
                     channelPostsError = null
                 } else if (ch.failure == null) {
@@ -6483,26 +6510,15 @@ private fun MessageBubble(
                         ),
                     )
                     // #PLATFORM-ICON (2026-11-17): иконка устройства отправителя
-                    // (Android/iPhone/iPad/Computer) из last_seen.platform. Зелёная
-                    // если online, серая если оффлайн. VK platform codes: 4=Android,
-                    // 2=iPhone, 3=iPad, 6=Windows, 7=web(full), 1=mobile web, 5=WinPhone.
-                    val lsPlatform = senderProfile?.lastSeen?.platform
-                    if (lsPlatform != null) {
+                    // (Android/iPhone/iPad/Computer) из last_seen.platform. Глобальная
+                    // reusable PlatformDeviceIcon — solid цвета (primary если online,
+                    // onSurface если оффлайн), 14dp, видна на всех темах.
+                    val pData = senderProfile?.platformIconData()
+                    if (pData != null) {
                         Spacer(Modifier.width(3.dp))
-                        val pIcon = when (lsPlatform) {
-                            4 -> Icons.Outlined.PhoneAndroid
-                            2 -> Icons.Outlined.PhoneIphone
-                            3 -> Icons.Outlined.TabletMac
-                            6, 7 -> Icons.Outlined.Computer
-                            else -> Icons.Outlined.DevicesOther
-                        }
-                        Icon(
-                            imageVector = pIcon,
-                            contentDescription = null,
-                            tint = if (senderProfile?.online == 1)
-                                MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            modifier = Modifier.size(12.dp),
+                        PlatformDeviceIcon(
+                            platform = pData.first,
+                            isOnline = pData.second,
                         )
                     }
                     // P0.46-reactions-inline: VK web PeerTitle__icon — маленькая иконка

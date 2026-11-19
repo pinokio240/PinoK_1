@@ -24861,3 +24861,35 @@ donut-видео отсутствовали, стена казалась обр�
 VK platform codes: 1=mobile web, 2=iPhone, 3=iPad, 4=Android, 5=WinPhone, 6=Windows, 7=web.
 
 Проверки: check-nested-comments OK; brace delta (0,0) по обоим файлам.
+
+## 2026-11-17 — fix(im): #PLATFORM-ICON v2 — global reusable + enrich lastSeen + solid colors
+
+Пользователь: «не вижу никаких иконок, делай глобальной для всех профилей, проследи
+видимость на всех цветовых темах».
+
+### Корень «не вижу иконок»
+VK messages.getHistory extended=1 НЕ отдаёт last_seen в profiles[] (fields=last_seen
+игнорируется для этого метода) → UserProfile.lastSeen null → platformIconData() null →
+иконка не рисуется. Предыдущий фикс (6c9e064) добавил last_seen в fields + парсинг,
+но VK не вернул поле → lastSeen остался null.
+
+### Фикс
+1. **enrichProfilesWithPlatform()** — новая private suspend fn в ChatDetailScreen:
+   после загрузки chatProfiles (messagesGetHistoryWithProfiles) добирает last_seen
+   через usersGetByIds(fields=last_seen) для ID без lastSeen. Безопасное слитие:
+   заменяет только если enriched-профиль имеет lastSeen. Применена ко ВСЕМ 4 местам
+   установки chatProfiles (result.profiles + ch.profiles).
+2. **PlatformDeviceIcon** — reusable composable в ui/components/PlatformIcon.kt:
+   принимает (platform, isOnline, modifier). Solid цвета: primary если online,
+   onSurface если оффлайн (full opacity, НЕ alpha 0.6 — была невидна на dark).
+   Размер 14dp (был 12dp). contentDescription с названием устройства.
+   +platformIconData() extension на UserProfile для удобства.
+3. ChatDetailScreen: inline platform icon заменён на PlatformDeviceIcon. Удалены
+   неиспользуемые PhoneAndroid/PhoneIphone/Computer/DevicesOther/TabletMac imports.
+
+### Видимость на всех темах
+- online → MaterialTheme.colorScheme.primary (solid, high contrast на light/dark).
+- offline → MaterialTheme.colorScheme.onSurface (solid, full opacity).
+- Размер 14dp (виден без лупы).
+
+Проверки: check-nested-comments OK; brace delta (0,0) по 3 файлам.
