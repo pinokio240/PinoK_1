@@ -679,9 +679,12 @@ private suspend fun enrichProfilesWithPlatform(
         var withPlatform = 0
         var withOnline = 0
         enriched.forEach { (id, profile) ->
-            if (profile.lastSeen != null) {
+            // Smart-cast fix: profile.lastSeen — public val из :core:data (другой
+            // модуль) → Kotlin не смарт-кастит после null-check. Захват в локальный val.
+            val ls = profile.lastSeen
+            if (ls != null) {
                 merged[id] = profile
-                if (profile.lastSeen.platform != null) withPlatform++
+                if (ls.platform != null) withPlatform++
             }
             if (profile.online == 1) withOnline++
         }
