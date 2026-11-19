@@ -58,6 +58,7 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.UserProfile
+import re.pinok.ui.components.PlatformDeviceIcon
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
 
@@ -515,12 +516,21 @@ private fun GroupMemberRow(
         }
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = member.fullName,
-                style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = member.fullName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // #PLATFORM-ICON (2026-11-17): иконка устройства участника группы
+                // (Android/iPhone/iPad/Computer) из last_seen.platform, fallback —
+                // зелёная точка для online. Глобальная reusable PlatformDeviceIcon.
+                if (member.lastSeen?.platform != null || member.online == 1) {
+                    Spacer(Modifier.width(3.dp))
+                    PlatformDeviceIcon(profile = member)
+                }
+            }
             val subtitle = member.status?.takeIf { it.isNotBlank() }
             if (subtitle != null) {
                 Text(

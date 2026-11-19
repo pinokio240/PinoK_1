@@ -3,6 +3,7 @@ package re.pinok.ui.screens.profile
 import re.pinok.ui.components.TabEmptyRow
 import re.pinok.ui.components.TabErrorRow
 import re.pinok.ui.components.TabProgressRow
+import re.pinok.ui.components.PlatformDeviceIcon
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -2730,6 +2731,13 @@ fun ProfileHeader(
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
+            // #PLATFORM-ICON (2026-11-17): иконка устройства профиля в шапке
+            // (Android/iPhone/iPad/Computer) из last_seen.platform, fallback —
+            // зелёная точка для online. Глобальная reusable PlatformDeviceIcon.
+            if (profile.lastSeen?.platform != null || profile.online == 1) {
+                Spacer(Modifier.width(3.dp))
+                PlatformDeviceIcon(profile = profile)
+            }
             if (profile.verified == 1) {
                 Spacer(Modifier.width(6.dp))
                 Text("\u2713", color = MaterialTheme.colorScheme.primary, fontSize = 20.sp)

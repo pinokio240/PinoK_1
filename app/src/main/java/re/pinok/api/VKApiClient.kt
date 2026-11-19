@@ -1437,7 +1437,7 @@ class VKApiClient(
             "count" to count.toString(),
             "rev" to "0",
             "extended" to "1",
-            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen",
+            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen,online_info",
         )
         if (offset > 0) args["offset"] = offset.toString()
         val json = call("messages.getHistory", args) ?: return emptyList()
@@ -1527,7 +1527,7 @@ class VKApiClient(
             "count" to count.toString(),
             "rev" to "0",
             "extended" to "1",
-            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen",
+            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen,online_info",
         )
         if (offset > 0) args["offset"] = offset.toString()
         // #IM-EMPTY-HONEST: null у call() = запрос не выполнен (VK API error,
@@ -1560,21 +1560,36 @@ class VKApiClient(
                 if (!el.isJsonObject) return@forEach
                 val o = el.asJsonObject
                 val uid = o.get("id")?.asLong ?: return@forEach
+                // #PLATFORM-ICON: online_info — fallback для online/platform если
+                // classic last_seen отсутствует (VK web-токен). is_mobile → platform
+                // (true=4 mobile, false=7 desktop). См. usersGetByIds для деталей.
+                val oi = o.getAsJsonObject("online_info")
+                val classicOnline = o.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+                val oiOnline = oi?.get("is_online")?.takeIf { !it.isJsonNull }?.asBoolean == true
+                val isMobile = oi?.get("is_mobile")?.takeIf { !it.isJsonNull }?.asBoolean
+                val derivedPlatform: Int? = when (isMobile) {
+                    true -> 4; false -> 7; null -> null
+                }
+                val classicLastSeen = o.getAsJsonObject("last_seen")?.let { ls ->
+                    UserProfile.LastSeen(
+                        time = ls.get("time")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                        platform = ls.get("platform")?.takeIf { !it.isJsonNull }?.asInt,
+                    )
+                }
+                val oiTime = oi?.get("last_seen")?.takeIf { !it.isJsonNull }?.asLong
+                val finalPlatform = classicLastSeen?.platform ?: derivedPlatform
+                val finalTime = classicLastSeen?.time ?: oiTime ?: 0L
+                val finalLastSeen = if (finalPlatform != null || finalTime != 0L) {
+                    UserProfile.LastSeen(time = finalTime, platform = finalPlatform)
+                } else null
                 profiles[uid] = UserProfile(
                     id = uid,
                     firstName = o.get("first_name")?.asString ?: "",
                     lastName = o.get("last_name")?.asString ?: "",
                     photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
                     photo200 = o.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
-                    online = o.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                    // #PLATFORM-ICON: last_seen{time,platform} — platform определяет
-                    // устройство (4=Android, 2/3=iPhone/iPad, 6/7=desktop, 1=mobile web).
-                    lastSeen = o.getAsJsonObject("last_seen")?.let { ls ->
-                        UserProfile.LastSeen(
-                            time = ls.get("time")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-                            platform = ls.get("platform")?.takeIf { !it.isJsonNull }?.asInt,
-                        )
-                    },
+                    online = if (classicOnline == 1 || oiOnline) 1 else 0,
+                    lastSeen = finalLastSeen,
                 )
             }
             resp.getAsJsonArray("groups")?.forEach { el ->
@@ -9702,14 +9717,22 @@ class VKApiClient(
                 // «Диалог».
                 val first = obj.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
                 val last = obj.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                // #PLATFORM-ICON: online_info — fallback для online/last_seen если
-                // classic поля отсутствуют (VK web-токен может не вернуть last_seen,
-                // но online_info возвращается надёжно). online_info.is_online → online,
-                // online_info.last_seen (Long, время без platform) → lastSeen.time.
+                // #PLATFORM-ICON: online_info — fallback для online/last_seen/platform.
+                // VK web-токен часто НЕ возвращает classic last_seen{time,platform},
+                // но online_info возвращается надёжно. Из online_info извлекаем:
+                //   is_online → online, last_seen (Long) → time, is_mobile → platform.
+                // is_mobile=true → platform=4 (мобильное — Android icon, не отличить от
+                //   iPhone без classic platform); is_mobile=false → platform=7 (desktop).
                 val classicOnline = obj.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0
                 val onlineInfo = obj.getAsJsonObject("online_info")
                 val onlineInfoOnline = onlineInfo?.get("is_online")?.takeIf { !it.isJsonNull }?.asBoolean == true
                 val finalOnline = if (classicOnline == 1 || onlineInfoOnline) 1 else 0
+                val isMobile = onlineInfo?.get("is_mobile")?.takeIf { !it.isJsonNull }?.asBoolean
+                val derivedPlatform: Int? = when (isMobile) {
+                    true -> 4    // mobile → Android icon (VK не отличает от iPhone без classic platform)
+                    false -> 7   // desktop → Computer icon
+                    null -> null
+                }
                 val classicLastSeen = obj.getAsJsonObject("last_seen")?.let { ls ->
                     UserProfile.LastSeen(
                         time = ls.get("time")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
@@ -9717,8 +9740,15 @@ class VKApiClient(
                     )
                 }
                 val onlineInfoLastSeenTime = onlineInfo?.get("last_seen")?.takeIf { !it.isJsonNull }?.asLong
-                val finalLastSeen = classicLastSeen
-                    ?: onlineInfoLastSeenTime?.let { UserProfile.LastSeen(time = it, platform = null) }
+                // Приоритет platform: classic > derived (is_mobile). time: classic > online_info > 0.
+                val finalPlatform = classicLastSeen?.platform ?: derivedPlatform
+                val finalTime = classicLastSeen?.time ?: onlineInfoLastSeenTime ?: 0L
+                val finalLastSeen = if (finalPlatform != null || finalTime != 0L) {
+                    UserProfile.LastSeen(time = finalTime, platform = finalPlatform)
+                } else null
+                if (uid == missingIds.firstOrNull()) {
+                    AppLog.i("VKApiClient", "#PLATFORM-ICON usersGetByIds sample: uid=$uid online=$finalOnline isMobile=$isMobile platform=$finalPlatform lastSeen=${onlineInfo != null}")
+                }
                 result[uid] = UserProfile(
                     id = uid,
                     firstName = first,
@@ -9727,8 +9757,6 @@ class VKApiClient(
                     photo200 = obj.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
                     online = finalOnline,
                     verified = obj.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                    // #PLATFORM-ICON: lastSeen{time,platform} — platform определяет
-                    // устройство (4=Android, 2/3=iPhone/iPad, 6/7=desktop, 1=mobile web).
                     lastSeen = finalLastSeen,
                 )
             }

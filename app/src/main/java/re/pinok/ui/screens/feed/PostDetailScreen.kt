@@ -108,6 +108,7 @@ import re.pinok.ui.components.AttachmentPickerTab
 // поста и рендер вложений комментария (включая стикеры).
 import re.pinok.ui.components.CommentAttachmentsView
 import re.pinok.ui.components.PhotoViewer
+import re.pinok.ui.components.PlatformDeviceIcon
 // PHOTO-SHARE-WIRE: share intent + ShareToChatSheet для PhotoViewer.
 import android.content.Intent
 import re.pinok.ui.components.ShareToChatSheet
@@ -1714,6 +1715,13 @@ internal fun CommentItem(
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
+                // #PLATFORM-ICON (2026-11-17): иконка устройства автора комментария
+                // (Android/iPhone/iPad/Computer) из last_seen.platform, fallback —
+                // зелёная точка для online. Глобальная reusable PlatformDeviceIcon.
+                if (author != null && (author.lastSeen?.platform != null || author.online == 1)) {
+                    Spacer(Modifier.width(3.dp))
+                    PlatformDeviceIcon(profile = author)
+                }
                 Text(
                     text = commentDateStr,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2154,6 +2162,13 @@ internal fun ReplyItem(
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.primary,
                     )
+                }
+                // #PLATFORM-ICON (2026-11-17): иконка устройства автора ответа в ветке
+                // (Android/iPhone/iPad/Computer) из last_seen.platform, fallback —
+                // зелёная точка для online. Глобальная reusable PlatformDeviceIcon.
+                if (author != null && (author.lastSeen?.platform != null || author.online == 1)) {
+                    Spacer(Modifier.width(3.dp))
+                    PlatformDeviceIcon(profile = author)
                 }
                 Spacer(Modifier.width(6.dp))
                 Text(

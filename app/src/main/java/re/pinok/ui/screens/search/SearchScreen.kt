@@ -55,6 +55,7 @@ import re.pinok.data.model.Group
 import re.pinok.data.model.Post
 import re.pinok.data.model.SearchHint
 import re.pinok.data.model.UserProfile
+import re.pinok.ui.components.PlatformDeviceIcon
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
 import re.pinok.util.toCountString
@@ -488,6 +489,13 @@ private fun PersonRow(user: UserProfile, onUserClick: (Long) -> Unit) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // #PLATFORM-ICON (2026-11-17): иконка устройства человека
+                // (Android/iPhone/iPad/Computer) из last_seen.platform, fallback —
+                // зелёная точка для online. Глобальная reusable PlatformDeviceIcon.
+                if (user.lastSeen?.platform != null || user.online == 1) {
+                    Spacer(Modifier.width(3.dp))
+                    PlatformDeviceIcon(profile = user)
+                }
                 if (user.verified == 1) {
                     Spacer(Modifier.width(4.dp))
                     Text("\u2713", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)

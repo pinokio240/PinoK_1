@@ -59,7 +59,9 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import re.pinok.SovaApp
 import re.pinok.data.model.Friend
+import re.pinok.data.model.UserProfile
 import re.pinok.ui.components.ErrorView
+import re.pinok.ui.components.PlatformDeviceIcon
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.navigation.ScreenTopBar
 import re.pinok.util.AppLog
@@ -457,6 +459,15 @@ private fun FriendRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // #PLATFORM-ICON (2026-11-17): иконка устройства друга
+                // (Android/iPhone/iPad/Computer) из last_seen.platform, fallback —
+                // зелёная точка для online. Friend имеет те же online/last_seen поля,
+                // что и UserProfile — мостим через toUserProfile() (PlatformDeviceIcon
+                // принимает UserProfile?). Глобальная reusable PlatformDeviceIcon.
+                if (friend.lastSeen?.platform != null || friend.online == 1) {
+                    Spacer(Modifier.width(3.dp))
+                    PlatformDeviceIcon(profile = friend.toUserProfile())
+                }
                 if (friend.verified == 1) {
                     Spacer(Modifier.width(4.dp))
                     Text("\u2713", color = MaterialTheme.colorScheme.primary, fontSize = 14.sp)
@@ -569,13 +580,22 @@ private fun RequestRow(
         }
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = request.fullName,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = request.fullName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // #PLATFORM-ICON (2026-11-17): иконка устройства автора заявки
+                // (Android/iPhone/iPad/Computer) из last_seen.platform, fallback —
+                // зелёная точка для online. Friend → UserProfile через toUserProfile().
+                if (request.lastSeen?.platform != null || request.online == 1) {
+                    Spacer(Modifier.width(3.dp))
+                    PlatformDeviceIcon(profile = request.toUserProfile())
+                }
+            }
             if (request.verified == 1) {
                 Text("\u2713 подтверждён", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp)
             }
@@ -629,3 +649,18 @@ private fun formatLastSeen(epochSec: Long): String {
         else -> SimpleDateFormat("d MMM", Locale.forLanguageTag("ru")).format(Date(epochSec * 1000))
     }
 }
+
+/**
+ * #PLATFORM-ICON (2026-11-17): мост Friend → UserProfile для [PlatformDeviceIcon].
+ * Friend содержит те же поля online/last_seen, что и UserProfile, но
+ * PlatformDeviceIcon принимает только UserProfile?. Здесь собираем минимальный
+ * UserProfile (id/имя/online/last_seen) — остальных полей PlatformDeviceIcon
+ * не читает (использует только lastSeen?.platform и online).
+ */
+private fun Friend.toUserProfile(): UserProfile = UserProfile(
+    id = id,
+    firstName = firstName,
+    lastName = lastName,
+    online = online,
+    lastSeen = lastSeen,
+)

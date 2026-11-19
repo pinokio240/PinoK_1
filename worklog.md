@@ -24923,3 +24923,47 @@ platform), либо зелёная точка (fallback). Для оффлайн 
 platform есть, иначе ничего. Лог #PLATFORM-ICON enrich покажет статистику.
 
 Проверки: check-nested-comments OK; brace delta (0,0).
+
+## 2026-11-17 — feat(im): #PLATFORM-ICON v4 — is_mobile derive + ГЛОБАЛЬНО во всех экранах
+
+Пользователь: «так и не увидел значка устройства рядом с именем людей, во всех разделах».
+
+### Корень v3
+VK web-токен НЕ возвращает classic last_seen.platform → platform null → иконка не
+рисовалась. online_info.is_mobile (mobile/desktop) — единственный доступный сигнал.
+
+### Фикс v4
+**1. VKApiClient — derive platform из online_info.is_mobile:**
+- usersGetByIds: +online_info в fields. Парсинг: classic last_seen{time,platform}
+  ИЛИ derived platform из is_mobile (true→4 mobile, false→7 desktop). finalOnline =
+  classic online ИЛИ online_info.is_online. Диагностический лог для первого профиля.
+- messagesGetHistoryWithProfiles: +online_info в fields. Та же логика derive
+  platform из is_mobile для profiles[].
+
+**2. PlatformDeviceIcon ГЛОБАЛЬНО (субагент PLATFORM-ICON-GLOBAL):**
+Добавлена в 5 файлов / 7 точек рендера имени:
+- PostDetailScreen.kt: CommentItem + ReplyItem (автор комментария/ответа).
+- ProfileScreen.kt: ProfileHeader (шапка своего/чужого профиля).
+- SearchScreen.kt: PersonRow (результаты поиска людей).
+- FriendsScreen.kt: FriendRow + RequestRow (мост Friend→UserProfile).
+- GroupMembersScreen.kt: GroupMemberRow.
+Везде guard: if (lastSeen?.platform != null || online == 1) → Spacer + PlatformDeviceIcon.
+
+### Пропущено (нет UserProfile/platform)
+- MessagesScreen (chat list): Chat.peer.title — строка без UserProfile. peer.online
+  есть но без platform → только green-dot возможен (не добавлено).
+- FeedScreen post-author header: PostCard authorName — строка, нет UserProfile в точке.
+- BookmarksScreen: уже есть online-индикатор → не дублируем.
+
+### Ожидание
+Теперь device-иконка (Android/Computer) видна везде где есть UserProfile:
+- сообщения в чате (ChatDetailScreen).
+- комментарии (PostDetail/FeedScreen CommentsBottomSheet через shared CommentItem).
+- профиль (свой/чужой).
+- поиск людей.
+- друзья/заявки.
+- участники сообщества.
+is_mobile=true → Android icon; is_mobile=false → Computer icon; online → primary;
+offline → onSurface. classic platform (если VK вернёт) → точная иконка (iPhone/iPad).
+
+Проверки: check-nested-comments OK; brace delta (0,0) по 6 файлам.
