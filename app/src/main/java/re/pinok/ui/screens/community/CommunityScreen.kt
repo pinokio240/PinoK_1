@@ -313,9 +313,11 @@ fun CommunityScreen(
             val next: PagedCursor? = when {
                 wp.nextFrom != null -> ServerNextFrom(wp.nextFrom)
                 cursor is ServerNextFrom -> null  // owners mode закончился (nextFrom null)
-                cursor == null && page.isNotEmpty() && wp.nextFrom == null && wp.rawCount > 0 -> {
+                cursor == null && page.isNotEmpty() && wp.rawCount > 0 -> {
                     // Первая страница через owners.getMainTab вернула posts, но nextFrom
                     // null → конец ленты (мало постов). НЕ падаем в wall.get fallback.
+                    // (wp.nextFrom == null здесь всегда true — первая ветка when выше
+                    // уже обработала wp.nextFrom != null.)
                     null
                 }
                 wp.rawCount == 0 -> null
