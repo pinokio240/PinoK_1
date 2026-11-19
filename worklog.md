@@ -24893,3 +24893,33 @@ VK messages.getHistory extended=1 НЕ отдаёт last_seen в profiles[] (fie
 - Размер 14dp (виден без лупы).
 
 Проверки: check-nested-comments OK; brace delta (0,0) по 3 файлам.
+
+## 2026-11-17 — fix(im): #PLATFORM-ICON v3 — online_info fallback + green dot + диагностика
+
+Пользователь: «так и не увидел намека на значок устройства, ГДЕ??»
+
+### Анализ
+VK web-токен (vk1.a.*) часто НЕ возвращает classic `last_seen.platform` — поле
+отсутствует или VK ограничивает для web-токенов/приватности. Без platform иконка
+не рисуется (platformIconData → null). online_info (новее поле) возвращается
+надёжнее, но classic online тоже может быть 0 даже если online_info.is_online=true.
+
+### Фикс
+1. **usersGetByIds**: +online_info в fields. Парсинг: classic online + online_info.
+   is_online → finalOnline (1 если любой true). classic last_seen{time,platform}
+   ИЛИ online_info.last_seen (Long, время без platform) → finalLastSeen.
+2. **PlatformDeviceIcon** (переписана): принимает UserProfile? целиком. 3 случая:
+   - platform != null → device icon (Android/iPhone/Computer), primary если online.
+   - platform == null && online → ЗЕЛЁНАЯ ТОЧКА 8dp (fallback — visible всегда,
+     даже если VK не отдал platform).
+   - platform == null && offline → ничего.
+3. **enrichProfilesWithPlatform**: +диагностический лог (missing/enriched/
+   withPlatform/withOnline) — пользователь видит в logcat что вернул VK.
+4. ChatDetailScreen: call-site обновлён под новую сигнатуру PlatformDeviceIcon(profile).
+
+### Ожидание
+Теперь для ONLINE-собеседников ВСЕГДА видна либо device-иконка (если VK отдал
+platform), либо зелёная точка (fallback). Для оффлайн — device-иконка если
+platform есть, иначе ничего. Лог #PLATFORM-ICON enrich покажет статистику.
+
+Проверки: check-nested-comments OK; brace delta (0,0).

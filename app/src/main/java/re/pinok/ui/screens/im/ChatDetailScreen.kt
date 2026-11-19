@@ -275,7 +275,6 @@ import re.pinok.ui.components.ForwardDialog
 import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
 import re.pinok.ui.components.PlatformDeviceIcon
-import re.pinok.ui.components.platformIconData
 import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.ui.components.VideoMessageShapes
 // MULTI-SELECT-ATTACH: buildVkAttachment — единый сборщик attachment-строки
@@ -677,9 +676,16 @@ private suspend fun enrichProfilesWithPlatform(
     return try {
         val enriched = apiClient.usersGetByIds(missingIds)
         val merged = profiles.toMutableMap()
+        var withPlatform = 0
+        var withOnline = 0
         enriched.forEach { (id, profile) ->
-            if (profile.lastSeen != null) merged[id] = profile
+            if (profile.lastSeen != null) {
+                merged[id] = profile
+                if (profile.lastSeen.platform != null) withPlatform++
+            }
+            if (profile.online == 1) withOnline++
         }
+        AppLog.i("ChatDetailScreen", "#PLATFORM-ICON enrich: missing=${missingIds.size} enriched=${enriched.size} withPlatform=$withPlatform withOnline=$withOnline")
         merged
     } catch (e: Exception) {
         AppLog.w("ChatDetailScreen", "enrichProfilesWithPlatform failed: ${e.message}")
@@ -6510,16 +6516,12 @@ private fun MessageBubble(
                         ),
                     )
                     // #PLATFORM-ICON (2026-11-17): иконка устройства отправителя
-                    // (Android/iPhone/iPad/Computer) из last_seen.platform. Глобальная
-                    // reusable PlatformDeviceIcon — solid цвета (primary если online,
-                    // onSurface если оффлайн), 14dp, видна на всех темах.
-                    val pData = senderProfile?.platformIconData()
-                    if (pData != null) {
+                    // (Android/iPhone/iPad/Computer) из last_seen.platform. Если VK
+                    // не отдал platform — зелёная точка для online (fallback). Глобальная
+                    // reusable PlatformDeviceIcon — solid цвета, видна на всех темах.
+                    if (senderProfile != null && (senderProfile.lastSeen?.platform != null || senderProfile.online == 1)) {
                         Spacer(Modifier.width(3.dp))
-                        PlatformDeviceIcon(
-                            platform = pData.first,
-                            isOnline = pData.second,
-                        )
+                        PlatformDeviceIcon(profile = senderProfile)
                     }
                     // P0.46-reactions-inline: VK web PeerTitle__icon — маленькая иконка
                     // реакции рядом с именем автора (если у сообщения есть реакция).

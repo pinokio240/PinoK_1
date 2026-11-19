@@ -9685,7 +9685,7 @@ class VKApiClient(
         if (isOffline() || userIds.isEmpty()) return emptyMap()
         val args = mutableMapOf(
             "user_ids" to userIds.joinToString(",") { it.toString() },
-            "fields" to "photo_100,photo_200,online,last_seen,verified",
+            "fields" to "photo_100,photo_200,online,last_seen,online_info,verified",
         )
         val json = call("users.get", args) ?: return emptyMap()
         return try {
@@ -9702,22 +9702,34 @@ class VKApiClient(
                 // «Диалог».
                 val first = obj.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
                 val last = obj.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                // #PLATFORM-ICON: online_info — fallback для online/last_seen если
+                // classic поля отсутствуют (VK web-токен может не вернуть last_seen,
+                // но online_info возвращается надёжно). online_info.is_online → online,
+                // online_info.last_seen (Long, время без platform) → lastSeen.time.
+                val classicOnline = obj.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+                val onlineInfo = obj.getAsJsonObject("online_info")
+                val onlineInfoOnline = onlineInfo?.get("is_online")?.takeIf { !it.isJsonNull }?.asBoolean == true
+                val finalOnline = if (classicOnline == 1 || onlineInfoOnline) 1 else 0
+                val classicLastSeen = obj.getAsJsonObject("last_seen")?.let { ls ->
+                    UserProfile.LastSeen(
+                        time = ls.get("time")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                        platform = ls.get("platform")?.takeIf { !it.isJsonNull }?.asInt,
+                    )
+                }
+                val onlineInfoLastSeenTime = onlineInfo?.get("last_seen")?.takeIf { !it.isJsonNull }?.asLong
+                val finalLastSeen = classicLastSeen
+                    ?: onlineInfoLastSeenTime?.let { UserProfile.LastSeen(time = it, platform = null) }
                 result[uid] = UserProfile(
                     id = uid,
                     firstName = first,
                     lastName = last,
                     photo100 = obj.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
                     photo200 = obj.get("photo_200")?.takeIf { !it.isJsonNull }?.asString,
-                    online = obj.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
+                    online = finalOnline,
                     verified = obj.get("verified")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
-                    // #PLATFORM-ICON: fields уже содержит last_seen — парсим platform
-                    // для иконки устройства рядом с именем.
-                    lastSeen = obj.getAsJsonObject("last_seen")?.let { ls ->
-                        UserProfile.LastSeen(
-                            time = ls.get("time")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-                            platform = ls.get("platform")?.takeIf { !it.isJsonNull }?.asInt,
-                        )
-                    },
+                    // #PLATFORM-ICON: lastSeen{time,platform} — platform определяет
+                    // устройство (4=Android, 2/3=iPhone/iPad, 6/7=desktop, 1=mobile web).
+                    lastSeen = finalLastSeen,
                 )
             }
             result
