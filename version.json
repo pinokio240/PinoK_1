@@ -1,6 +1,14 @@
 {
   "versions": [
     {
+      "versionCode": 232,
+      "versionName": "2.3.2",
+      "stamp": "calls-2026.11.19-2.3.2",
+      "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/v2.3.2/Pinok_2_3_2.apk",
+      "sha256": "9fb7fe08bb0cf251e194f36e1eb93858594bba38777386ee67696aeee5312630",
+      "notes": "Платные видео/посты (donut) — индикация, пропадающие карточки с видео в группах из-за платного контента, мелкие улучшения работы PiP"
+    },
+    {
       "versionCode": 231,
       "versionName": "2.3.1",
       "stamp": "calls-2026.11.16-2.3.1",

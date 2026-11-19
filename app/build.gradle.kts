@@ -38,11 +38,11 @@ android {
         // #RELEASE-V229-BUMP (2026-11-05): bump 228→229 — уведомления: единая карточка,
         // переход по уведомлению к комментарию (пост/клип), фикс лупа загрузки
         // комментариев (CancellationException при закрытии плеера).
-        // #RELEASE-V231-BUMP (2026-11-16): bump 230→231 — стабилизация сети,
-        // оптимизация кода (волны рефакторинга), работа над отправкой файлов.
-        versionCode = 231
-        versionName = "2.3.1"
-        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-11-16T12:00:00+03:00\"")
+        // #RELEASE-V232-BUMP (2026-11-19): bump 231→232 — платные видео/посты (donut),
+        // пропадающие карточки с видео в группах (owners.getMainTab), улучшения PiP.
+        versionCode = 232
+        versionName = "2.3.2"
+        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-11-19T12:00:00+03:00\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
