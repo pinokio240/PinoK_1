@@ -9746,7 +9746,7 @@ class VKApiClient(
                 val finalLastSeen = if (finalPlatform != null || finalTime != 0L) {
                     UserProfile.LastSeen(time = finalTime, platform = finalPlatform)
                 } else null
-                if (uid == missingIds.firstOrNull()) {
+                if (uid == userIds.firstOrNull()) {
                     AppLog.i("VKApiClient", "#PLATFORM-ICON usersGetByIds sample: uid=$uid online=$finalOnline isMobile=$isMobile platform=$finalPlatform lastSeen=${onlineInfo != null}")
                 }
                 result[uid] = UserProfile(
