@@ -109,6 +109,7 @@ import re.pinok.ui.components.AttachmentPickerSheet
 import re.pinok.ui.components.AttachmentPickerTab
 import re.pinok.ui.components.CommentAttachmentsView
 import re.pinok.ui.components.PhotoViewer
+import re.pinok.ui.components.PlatformDeviceIcon
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.ui.components.UnifiedAttachMenu
 import re.pinok.ui.components.buildVkAttachment
@@ -2070,6 +2071,15 @@ private fun BoardCommentCard(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        // #PLATFORM-ICON (2026-11-17): device-иконка автора комментария
+                        // (Android/iPhone/iPad/Computer) из author.last_seen.platform,
+                        // fallback — зелёная точка для online. author = authors[creatorId]
+                        // (UserProfile?). Smart-cast: local val → после != null кастится;
+                        // lastSeen?.platform — safe-call (cross-module :core:data).
+                        if (author != null && (author.lastSeen?.platform != null || author.online == 1)) {
+                            Spacer(modifier = Modifier.width(3.dp))
+                            PlatformDeviceIcon(profile = author)
+                        }
                         // GAPS-FIX: comment-author-avatar-admin — бейдж «АДМИН» для
                         // комментариев от имени сообщества (creatorId < 0, как VK web
                         // comment-author-avatar-admin). Рядом с именем автора.

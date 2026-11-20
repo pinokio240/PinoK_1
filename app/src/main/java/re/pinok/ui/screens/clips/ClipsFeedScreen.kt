@@ -83,6 +83,7 @@ import re.pinok.data.model.Video
 import re.pinok.media.ClipPlayer
 import re.pinok.media.ClipVideoDownloadManager
 import re.pinok.media.VideoPlayerConfig
+import re.pinok.ui.components.PlatformDeviceIcon
 import re.pinok.ui.screens.videoplayer.VideoDownloadSheet
 import re.pinok.util.AppLog
 import re.pinok.util.VkUserAgent
@@ -786,8 +787,11 @@ private fun ClipPlayerItem(
                 .padding(start = 16.dp, end = 80.dp, bottom = 24.dp),
         ) {
             // Имя автора (тап → профиль).
+            // #PLATFORM-ICON (2026-11-17): profile автора клипа для device-иконки.
+            // ownerId > 0 → profiles[ownerId] (UserProfile); группа/offline → null.
+            val authorProfile: UserProfile? = if (clip.ownerId > 0) profiles[clip.ownerId] else null
             val authorName = if (clip.ownerId > 0) {
-                val p = profiles[clip.ownerId]
+                val p = authorProfile
                 p?.let { "${it.firstName} ${it.lastName}".trim() } ?: "id${clip.ownerId}"
             } else if (clip.ownerId < 0) {
                 groups[-clip.ownerId]?.name ?: "Сообщество"
@@ -802,6 +806,14 @@ private fun ClipPlayerItem(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.clickable { onAuthorClick() },
                 )
+                // #PLATFORM-ICON (2026-11-17): device-иконка автора (Android/iPhone/
+                // iPad/Computer) из authorProfile.last_seen.platform, fallback —
+                // зелёная точка для online. Smart-cast: local val → после != null
+                // кастится; lastSeen?.platform — safe-call (cross-module :core:data).
+                if (authorProfile != null && (authorProfile.lastSeen?.platform != null || authorProfile.online == 1)) {
+                    Spacer(Modifier.width(3.dp))
+                    PlatformDeviceIcon(profile = authorProfile)
+                }
                 if (clip.ownerId != 0L && !clip.isSubscribedToAuthor) {
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(

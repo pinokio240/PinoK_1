@@ -25002,3 +25002,33 @@ offline → onSurface. classic platform (если VK вернёт) → точн�
 3. online_info.is_mobile (mobile/desktop — deprecated, грубо).
 
 Проверки: check-nested-comments OK; brace delta (0,0).
+
+## 2026-11-17 — feat(im): #PLATFORM-ICON FULL-SWEEP — иконка во ВСЕХ экранах с именем
+
+Пользователь: «почему значок не добавлен везде где есть имя пользователя?»
+
+### Sweep (субагент PLATFORM-ICON-FULL-SWEEP)
+Добавлена PlatformDeviceIcon в 5 новых файлов + PostCard refactor:
+- **PostCard.kt**: +параметр authorProfile: UserProfile? = null. После Text(authorName)
+  — guard + PlatformDeviceIcon. Call-sites обновлены: FeedScreen, BookmarksScreen,
+  ProfileScreen (WallPostCard), UserProfileScreen.
+- **BookmarksScreen.kt**: BookmarkUserRow после имени (user: UserProfile). Существующий
+  online-индикатор оставлен.
+- **BoardTopicScreen.kt**: BoardCommentCard после authorName (authors[comment.creatorId]).
+  Покрывает И тему, И комментарии.
+- **CommunityAdminScreens.kt**: 4 места (заявки/бан/приглашения/приглашённые).
+- **ClipsFeedScreen.kt**: ClipPlayerItem после authorName (profiles[clip.ownerId]).
+
+### Итог покрытия: 12 файлов
+PlatformIcon.kt (def) + ChatDetailScreen, PostDetailScreen, ProfileScreen, SearchScreen,
+FriendsScreen, GroupMembersScreen (v4) + PostCard, BookmarksScreen, BoardTopicScreen,
+CommunityAdminScreens, ClipsFeedScreen (v5-sweep).
+
+### Обоснованные пропуски (нет UserProfile/online/lastSeen)
+- BlacklistScreen: BannedUser model — нет lastSeen/online полей.
+- CommunityScreen PostCard call-site: автор поста = группа (fromId<0), signer — Map<Long,String>.
+- MessagesScreen: Chat.peer.title — строка, есть online-индикатор (green dot).
+- UserProfileScreen TopAppBar: дубликат ProfileHeader.
+- ChatDetailScreen WallPostCard: автор = канал/группа (String).
+
+Проверки: check-nested-comments OK; brace delta (0,0) по 8 файлам.

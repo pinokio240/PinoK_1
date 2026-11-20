@@ -2504,6 +2504,11 @@ private fun PostCard(
     // Подтверждённость группы (verified-бейдж) — для authorIsGroup и g.verified == 1.
     val verified = authorIsGroup && (groups[-post.fromId]?.verified == 1)
 
+    // #PLATFORM-ICON (2026-11-17): profile автора для device-иконки в шапке поста
+    // (Android/iPhone/iPad/Computer). fromId > 0 → profiles[post.fromId];
+    // группа (fromId < 0) → null (у групп нет last_seen.platform).
+    val authorProfile: UserProfile? = if (post.fromId > 0) profiles[post.fromId] else null
+
     // ─── Оптимистичный лайк (ключ «ownerId_id» из likesState) ───
     val likeKey = "${post.ownerId}_${post.id}"
     val likesOverride = likesState[likeKey]
@@ -2576,6 +2581,8 @@ private fun PostCard(
         authorName = authorName,
         authorPhoto = authorPhoto,
         authorIsGroup = authorIsGroup,
+        // #PLATFORM-ICON (2026-11-17): profile автора для device-иконки в шапке.
+        authorProfile = authorProfile,
         signerName = signerName,
         showFullDate = false,          // лента — относительное время
         isBookmarked = null,           // закладка показывается только в ⋮-меню

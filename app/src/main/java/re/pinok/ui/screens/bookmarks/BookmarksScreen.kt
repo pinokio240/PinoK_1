@@ -77,6 +77,7 @@ import re.pinok.data.model.FaveTag
 import re.pinok.data.model.Post
 import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
+import re.pinok.ui.components.PlatformDeviceIcon
 import re.pinok.ui.components.PostCard as UnifiedPostCard
 import re.pinok.ui.components.ScrollToTopFab
 import re.pinok.util.AppLog
@@ -1056,6 +1057,10 @@ private fun BookmarkPostCard(
         authorName = authorName,
         authorPhoto = authorPhoto,
         authorIsGroup = authorIsGroup,
+        // #PLATFORM-ICON (2026-11-17): profile автора для device-иконки в шапке
+        // поста. author = postAuthor ?: fallbackUser (оба UserProfile?). Для
+        // группы (authorIsGroup) — null (группы не имеют last_seen.platform).
+        authorProfile = if (authorIsGroup) null else author,
         signerName = null,
         // Полная дата (закладка показывает абсолютное время поста).
         showFullDate = true,
@@ -1161,6 +1166,14 @@ private fun BookmarkUserRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // #PLATFORM-ICON (2026-11-17): иконка устройства (Android/iPhone/
+                // iPad/Computer) из user.last_seen.platform, fallback — зелёная
+                // точка для online. Глобальная reusable PlatformDeviceIcon.
+                // Существующий online-индикатор ниже НЕ удаляем — оставляем как есть.
+                if (user.lastSeen?.platform != null || user.online == 1) {
+                    Spacer(Modifier.width(3.dp))
+                    PlatformDeviceIcon(profile = user)
+                }
                 if (user.isOnline) {
                     Spacer(Modifier.width(6.dp))
                     Box(

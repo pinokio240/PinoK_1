@@ -102,6 +102,7 @@ import re.pinok.data.model.Friend
 import re.pinok.data.model.Post
 import re.pinok.data.model.UserProfile
 import re.pinok.ui.components.ErrorView
+import re.pinok.ui.components.PlatformDeviceIcon
 import re.pinok.util.AppLog
 import re.pinok.util.toCountString
 import java.text.SimpleDateFormat
@@ -1146,13 +1147,22 @@ fun AdminPeopleScreen(
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = user.fullName,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.Medium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
+                                        // #PLATFORM-ICON (2026-11-17): device-иконка автора заявки
+                                        // (Android/iPhone/iPad/Computer) из user.last_seen.platform,
+                                        // fallback — зелёная точка для online. user — UserProfile.
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = user.fullName,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            if (user.lastSeen?.platform != null || user.online == 1) {
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                PlatformDeviceIcon(profile = user)
+                                            }
+                                        }
                                         user.status?.let {
                                             Text(
                                                 text = it,
@@ -1249,13 +1259,25 @@ fun AdminPeopleScreen(
                                             size = 36.dp,
                                         )
                                         Spacer(modifier = Modifier.width(10.dp))
-                                        Text(
-                                            text = found.fullName,
-                                            style = MaterialTheme.typography.bodyMedium,
+                                        // #PLATFORM-ICON (2026-11-17): device-иконка найденного
+                                        // юзера (Android/iPhone/iPad/Computer) из found.last_seen.platform,
+                                        // fallback — зелёная точка для online. found — UserProfile.
+                                        Row(
                                             modifier = Modifier.weight(1f),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = found.fullName,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                modifier = Modifier.weight(1f),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            if (found.lastSeen?.platform != null || found.online == 1) {
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                PlatformDeviceIcon(profile = found)
+                                            }
+                                        }
                                         TextButton(onClick = { searchBanTarget = found }) {
                                             Text("Бан")
                                         }
@@ -1847,13 +1869,32 @@ fun AdminInvitesScreen(
                                             )
                                             Spacer(modifier = Modifier.width(12.dp))
                                             Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = friend.fullName,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    fontWeight = FontWeight.Medium,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                )
+                                                // #PLATFORM-ICON (2026-11-17): device-иконка друга
+                                                // (Android/iPhone/iPad/Computer) из friend.last_seen.platform,
+                                                // fallback — зелёная точка для online. Friend → UserProfile
+                                                // inline (PlatformDeviceIcon принимает UserProfile?; читает
+                                                // только lastSeen?.platform и online — остальные поля не нужны).
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = friend.fullName,
+                                                        style = MaterialTheme.typography.bodyLarge,
+                                                        fontWeight = FontWeight.Medium,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                    )
+                                                    if (friend.lastSeen?.platform != null || friend.online == 1) {
+                                                        Spacer(modifier = Modifier.width(3.dp))
+                                                        PlatformDeviceIcon(
+                                                            profile = UserProfile(
+                                                                id = friend.id,
+                                                                firstName = friend.firstName,
+                                                                lastName = friend.lastName,
+                                                                online = friend.online,
+                                                                lastSeen = friend.lastSeen,
+                                                            ),
+                                                        )
+                                                    }
+                                                }
                                             }
                                             if (invitedIds.contains(friend.id)) {
                                                 Text(
@@ -1917,13 +1958,22 @@ fun AdminInvitesScreen(
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = user.fullName,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.Medium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
+                                        // #PLATFORM-ICON (2026-11-17): device-иконка приглашённого
+                                        // (Android/iPhone/iPad/Computer) из user.last_seen.platform,
+                                        // fallback — зелёная точка для online. user — UserProfile.
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = user.fullName,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            if (user.lastSeen?.platform != null || user.online == 1) {
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                PlatformDeviceIcon(profile = user)
+                                            }
+                                        }
                                     }
                                     TextButton(
                                         onClick = { recall(user) },

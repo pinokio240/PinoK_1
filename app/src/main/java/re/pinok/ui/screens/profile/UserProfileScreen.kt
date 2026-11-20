@@ -1367,6 +1367,10 @@ fun UserProfileScreen(
                     post = post,
                     authorName = p.fullName,
                     authorPhoto = p.photo200 ?: p.photo100,
+                    // #PLATFORM-ICON (2026-11-17): profile владельца стены для
+                    // device-иконки в шапке поста. p — просматриваемый профиль.
+                    // Для постов от группы (fromId<0) обёртка WallPostCard зануляет.
+                    authorProfile = p,
                     carouselEnabled = carouselEnabled,
                     onVideoClick = onVideoClick,
                     onPostClick = onPostClick,

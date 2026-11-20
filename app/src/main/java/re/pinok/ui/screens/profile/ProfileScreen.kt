@@ -1661,6 +1661,11 @@ fun ProfileScreen(
                     post = post,
                     authorName = p.fullName,
                     authorPhoto = p.photo200 ?: p.photo100,
+                    // #PLATFORM-ICON (2026-11-17): profile владельца стены для
+                    // device-иконки в шапке поста. p — текущий просматриваемый
+                    // профиль (автор постов своей стены). Для постов от группы
+                    // (fromId<0) обёртка WallPostCard сама зануляет.
+                    authorProfile = p,
                     onVideoClick = onVideoClick,
                     // Fix #374: тап по посту/репосту → PostDetailScreen (экран-параметр
                     // onPostClick :172; обёртка SovaNavHost: PostHolder.last + buildRoute
@@ -2939,6 +2944,11 @@ fun WallPostCard(
     post: Post,
     authorName: String,
     authorPhoto: String?,
+    // #PLATFORM-ICON (2026-11-17): profile автора для device-иконки в шапке поста
+    // (Android/iPhone/iPad/Computer). На стене профиля автор = владелец стены (p).
+    // Для постов от группы (fromId<0) обёртка сама зануляет (см. вызов PostCard).
+    // Дефолт null — легаси-вызовы (UserProfileScreen/ChatDetail) без profile.
+    authorProfile: UserProfile? = null,
     onVideoClick: (Video) -> Unit = {},
     onPostClick: (Post) -> Unit = {},
     // Sprint 2, P1-1 (#88): тап по фото → полноэкранный просмотр.
@@ -3078,6 +3088,11 @@ fun WallPostCard(
         authorName = authorName,
         authorPhoto = authorPhoto,
         authorIsGroup = isGroupPost,
+        // #PLATFORM-ICON (2026-11-17): device-иконка автора (Android/iPhone/...).
+        // Для постов от группы (fromId<0) → null (у групп нет last_seen.platform),
+        // даже если authorProfile передан (на стене чужой группы автор-владелец
+        // стены — это сама группа, не пользователь p).
+        authorProfile = if (isGroupPost) null else authorProfile,
         signerName = null, // ProfileScreen не имеет extended profiles map для signerId lookup
         showFullDate = false,
         // Закладок в WallPostCard не было — иконку и пункт меню не добавляем.

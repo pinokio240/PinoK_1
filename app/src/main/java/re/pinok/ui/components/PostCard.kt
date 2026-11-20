@@ -6,11 +6,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -53,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import re.pinok.data.model.Post
+import re.pinok.data.model.UserProfile
 import re.pinok.data.model.Video
 import re.pinok.ui.screens.feed.ReactionEntry
 import re.pinok.ui.screens.feed.ReactionPicker
@@ -99,6 +102,12 @@ fun PostCard(
     authorName: String,
     authorPhoto: String?,
     authorIsGroup: Boolean,               // post.fromId < 0
+    // #PLATFORM-ICON (2026-11-17): profile автора для device-иконки (Android/
+    // iPhone/iPad/Computer) рядом с именем в шапке поста. null — иконки нет
+    // (группа / profile недоступен / offline без platform). Smart-cast: параметр
+    // local, после != null кастится к non-null; lastSeen?.platform — safe-call
+    // (cross-module :core:data, smart-cast свойства чужого модуля невозможен).
+    authorProfile: UserProfile? = null,
     signerName: String? = null,
     // ══ новые требования пользователя ══
     showFullDate: Boolean = false,        // true → toAbsoluteTime(), false → toRelativeTime()
@@ -293,6 +302,18 @@ fun PostCard(
                             textDecoration = TextDecoration.Underline,
                             modifier = Modifier.clickable { onAuthorClick() },
                         )
+                        // #PLATFORM-ICON (2026-11-17): device-иконка автора поста
+                        // (Android/iPhone/iPad/Computer) из authorProfile.lastSeen.platform,
+                        // fallback — зелёная точка для online. Smart-cast: параметр local →
+                        // после != null кастится к non-null; lastSeen?.platform — safe-call
+                        // (cross-module :core:data, чужой модуль — smart-cast val.lastSeen
+                        // невозможен, используем ?.). Guard повторяет логику PlatformDeviceIcon,
+                        // но нужен здесь чтобы не плодить пустой Spacer для offline-юзеров.
+                        val ap = authorProfile
+                        if (ap != null && (ap.lastSeen?.platform != null || ap.online == 1)) {
+                            Spacer(Modifier.width(3.dp))
+                            PlatformDeviceIcon(profile = ap)
+                        }
                         // verified-бейдж (для подтверждённых групп)
                         if (authorIsGroup && verified) {
                             Icon(
