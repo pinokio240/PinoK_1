@@ -24967,3 +24967,38 @@ is_mobile=true → Android icon; is_mobile=false → Computer icon; online → p
 offline → onSurface. classic platform (если VK вернёт) → точная иконка (iPhone/iPad).
 
 Проверки: check-nested-comments OK; brace delta (0,0) по 6 файлам.
+
+## 2026-11-17 — feat(im): #PLATFORM-ICON v5 — online_app (VK app ID) для точной детекции
+
+Пользователь: «детекция хромает, найди более гарантированный способ понять с какого
+устройства заходит человек, найди документацию ВК и не только».
+
+### Исследование
+- VK API docs + Fenrir-for-VK VKApiUser.kt: помимо last_seen.platform и online_info.is_mobile,
+  VK отдаёт online_app (Int) — ID приложения VK, когда юзер онлайн через мобильное приложение.
+  online_app ТОЧНЕЕ is_mobile (mobile/desktop) — определяет конкретный клиент:
+    2274003 = VK Android
+    3140623 = VK iPhone
+    3682744 = VK iPad
+    3505359 = VK Live (mobile)
+    6122960 = VK Messenger (mobile)
+    6287487 = VK ID (web)
+    1 = mobile web (m.vk.com)
+  online_app возвращается в fields=online (вместе с online_mobile boolean).
+- Fenrir VKApiUser: online_mobile: Boolean, online_app: Int — парсит оба.
+
+### Фикс
+- +private fun onlineAppToPlatform(appId: Int): Int? — mapping VK app_id → platform code.
+  2274003/3505359/6122960 → 4 (Android), 3140623 → 2 (iPhone), 3682744 → 3 (iPad),
+  6287487/6717214 → 7 (web), 1 → 1 (mobile web), unknown mobile → 4.
+- usersGetByIds: парсит online_app, приоритет platform: classic last_seen.platform >
+  online_app (точное приложение) > is_mobile (mobile/desktop fallback).
+- messagesGetHistoryWithProfiles: тот же online_app парсинг + приоритет.
+- Диагностический лог v5: onlineApp, appPlatform, isMobile, finalPlatform.
+
+### Приоритет детекции (от надёжной к fallback)
+1. last_seen.platform (classic, если VK вернул — самый точный, codes 1-7).
+2. online_app (VK app ID — точное приложение, когда онлайн).
+3. online_info.is_mobile (mobile/desktop — deprecated, грубо).
+
+Проверки: check-nested-comments OK; brace delta (0,0).

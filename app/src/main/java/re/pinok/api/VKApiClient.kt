@@ -1560,14 +1560,16 @@ class VKApiClient(
                 if (!el.isJsonObject) return@forEach
                 val o = el.asJsonObject
                 val uid = o.get("id")?.asLong ?: return@forEach
-                // #PLATFORM-ICON: online_info — fallback для online/platform если
-                // classic last_seen отсутствует (VK web-токен). is_mobile → platform
-                // (true=4 mobile, false=7 desktop). См. usersGetByIds для деталей.
+                // #PLATFORM-ICON v5: online_app (VK app ID) — точная детекция клиента
+                // (Android/iPhone/iPad). Приоритет: classic platform > online_app > is_mobile.
+                // См. onlineAppToPlatform helper и usersGetByIds для деталей.
                 val oi = o.getAsJsonObject("online_info")
                 val classicOnline = o.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0
                 val oiOnline = oi?.get("is_online")?.takeIf { !it.isJsonNull }?.asBoolean == true
+                val onlineApp = o.get("online_app")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+                val appPlatform = onlineAppToPlatform(onlineApp)
                 val isMobile = oi?.get("is_mobile")?.takeIf { !it.isJsonNull }?.asBoolean
-                val derivedPlatform: Int? = when (isMobile) {
+                val mobileDerived: Int? = when (isMobile) {
                     true -> 4; false -> 7; null -> null
                 }
                 val classicLastSeen = o.getAsJsonObject("last_seen")?.let { ls ->
@@ -1577,7 +1579,7 @@ class VKApiClient(
                     )
                 }
                 val oiTime = oi?.get("last_seen")?.takeIf { !it.isJsonNull }?.asLong
-                val finalPlatform = classicLastSeen?.platform ?: derivedPlatform
+                val finalPlatform = classicLastSeen?.platform ?: appPlatform ?: mobileDerived
                 val finalTime = classicLastSeen?.time ?: oiTime ?: 0L
                 val finalLastSeen = if (finalPlatform != null || finalTime != 0L) {
                     UserProfile.LastSeen(time = finalTime, platform = finalPlatform)
@@ -9696,6 +9698,29 @@ class VKApiClient(
      *
      * Возвращает Map<userId, UserProfile>.
      */
+    // #PLATFORM-ICON v5: VK online_app (application ID) → platform code.
+    // Когда юзер онлайн через мобильное приложение, VK отдаёт online_app = ID
+    // приложения. Это ТОЧНЕЕ чем is_mobile (mobile/desktop) — определяет конкретный
+    // клиент (Android/iPhone/iPad). Источник: VK API docs (fields=online),
+    // Fenrir-for-VK VKApiUser (online_app: Int).
+    //   2274003 = VK Android → 4
+    //   3140623 = VK iPhone → 2
+    //   3682744 = VK iPad → 3
+    //   3505359 = VK Live (mobile) → 4
+    //   6122960 = VK Messenger (mobile) → 4
+    //   6287487 = VK ID (web) → 7
+    //   1 = mobile web (m.vk.com) → 1
+    // Прочие mobile app_id (неопознанные) → 4 (Android default для mobile).
+    private fun onlineAppToPlatform(appId: Int): Int? = when (appId) {
+        0 -> null
+        2274003, 3505359, 6122960 -> 4    // Android / VK Live / VK Messenger
+        3140623 -> 2                       // iPhone
+        3682744 -> 3                       // iPad
+        6287487, 6717214 -> 7              // VK ID / VK Admin (web/desktop)
+        1 -> 1                             // mobile web
+        else -> if (appId > 0) 4 else null // unknown mobile app → Android default
+    }
+
     override suspend fun usersGetByIds(userIds: List<Long>): Map<Long, UserProfile> {
         if (isOffline() || userIds.isEmpty()) return emptyMap()
         val args = mutableMapOf(
@@ -9717,21 +9742,20 @@ class VKApiClient(
                 // «Диалог».
                 val first = obj.get("first_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
                 val last = obj.get("last_name")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                // #PLATFORM-ICON: online_info — fallback для online/last_seen/platform.
-                // VK web-токен часто НЕ возвращает classic last_seen{time,platform},
-                // но online_info возвращается надёжно. Из online_info извлекаем:
-                //   is_online → online, last_seen (Long) → time, is_mobile → platform.
-                // is_mobile=true → platform=4 (мобильное — Android icon, не отличить от
-                //   iPhone без classic platform); is_mobile=false → platform=7 (desktop).
+                // #PLATFORM-ICON v5: надёжная детекция устройства через online_app
+                // (VK app ID). Когда юзер онлайн через мобильное приложение, VK
+                // отдаёт online_app = ID приложения (2274003=Android, 3140623=iPhone,
+                // 3682744=iPad). Это ТОЧНЕЕ чем is_mobile (который только mobile/desktop).
+                // Приоритет platform: classic last_seen.platform > online_app > is_mobile.
                 val classicOnline = obj.get("online")?.takeIf { !it.isJsonNull }?.asInt ?: 0
                 val onlineInfo = obj.getAsJsonObject("online_info")
                 val onlineInfoOnline = onlineInfo?.get("is_online")?.takeIf { !it.isJsonNull }?.asBoolean == true
                 val finalOnline = if (classicOnline == 1 || onlineInfoOnline) 1 else 0
+                val onlineApp = obj.get("online_app")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+                val appPlatform = onlineAppToPlatform(onlineApp)
                 val isMobile = onlineInfo?.get("is_mobile")?.takeIf { !it.isJsonNull }?.asBoolean
-                val derivedPlatform: Int? = when (isMobile) {
-                    true -> 4    // mobile → Android icon (VK не отличает от iPhone без classic platform)
-                    false -> 7   // desktop → Computer icon
-                    null -> null
+                val mobileDerived: Int? = when (isMobile) {
+                    true -> 4; false -> 7; null -> null
                 }
                 val classicLastSeen = obj.getAsJsonObject("last_seen")?.let { ls ->
                     UserProfile.LastSeen(
@@ -9740,14 +9764,14 @@ class VKApiClient(
                     )
                 }
                 val onlineInfoLastSeenTime = onlineInfo?.get("last_seen")?.takeIf { !it.isJsonNull }?.asLong
-                // Приоритет platform: classic > derived (is_mobile). time: classic > online_info > 0.
-                val finalPlatform = classicLastSeen?.platform ?: derivedPlatform
+                // Приоритет: classic platform > online_app (точное приложение) > is_mobile.
+                val finalPlatform = classicLastSeen?.platform ?: appPlatform ?: mobileDerived
                 val finalTime = classicLastSeen?.time ?: onlineInfoLastSeenTime ?: 0L
                 val finalLastSeen = if (finalPlatform != null || finalTime != 0L) {
                     UserProfile.LastSeen(time = finalTime, platform = finalPlatform)
                 } else null
                 if (uid == userIds.firstOrNull()) {
-                    AppLog.i("VKApiClient", "#PLATFORM-ICON usersGetByIds sample: uid=$uid online=$finalOnline isMobile=$isMobile platform=$finalPlatform lastSeen=${onlineInfo != null}")
+                    AppLog.i("VKApiClient", "#PLATFORM-ICON v5 sample: uid=$uid online=$finalOnline onlineApp=$onlineApp appPlatform=$appPlatform isMobile=$isMobile finalPlatform=$finalPlatform")
                 }
                 result[uid] = UserProfile(
                     id = uid,
