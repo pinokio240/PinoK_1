@@ -23076,24 +23076,40 @@ class VKApiClient(
             "count" to count.toString(),
             "offset" to offset.toString(),
             "fields" to "photo_100,first_name,last_name",
-        ), forceWebGateway = true) ?: return emptyList()
+        ), forceWebGateway = true) ?: run {
+            AppLog.w("VKApiClient", "groupsGetBanned: call()=null err=${lastApiError}")
+            return emptyList()
+        }
+        // #BLACKLIST-DIAG: логируем raw response для диагностики структуры.
+        val rawStr = json.toString().take(500)
+        AppLog.i("VKApiClient", "groupsGetBanned: groupId=$groupId raw=${rawStr}")
         return try {
-            val resp = json.getAsJsonObject("response") ?: return emptyList()
-            val items = resp.getAsJsonArray("items") ?: return emptyList()
+            val resp = json.getAsJsonObject("response") ?: run {
+                AppLog.w("VKApiClient", "groupsGetBanned: no response object, keys=${json.keySet()}")
+                return emptyList()
+            }
+            // VK API groups.getBanned: response может быть {count, items[]} ИЛИ
+            // напрямую items[] (web gateway формат). Пробуем оба.
+            val items = resp.getAsJsonArray("items")
+                ?: json.getAsJsonArray("items")
+                ?: run {
+                    AppLog.w("VKApiClient", "groupsGetBanned: no items array, resp keys=${resp.keySet()}")
+                    return emptyList()
+                }
+            AppLog.i("VKApiClient", "groupsGetBanned: items=${items.size()}")
             items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
                 // VK API groups.getBanned: item = {type:"ban"/"group", ban_info:{...},
                 // profile:{id,first_name,...} (для юзеров) ИЛИ group:{id,name,...} (для
-                // забаненных сообществ)}. Раньше искали top-level → null → пустой список.
-                // Потом искали "user" → тоже null (VK использует "profile", не "user").
-                // Fenrir VKApiBanned: @SerialName("profile") + @SerialName("group").
+                // забаненных сообществ)}. Fenrir VKApiBanned: @SerialName("profile").
                 val userObj = o.getAsJsonObject("profile")?.takeIf { it.isJsonObject }
                     ?: o.getAsJsonObject("user")?.takeIf { it.isJsonObject }
                     ?: o.getAsJsonObject("group")?.takeIf { it.isJsonObject }
                     ?: o
                 val uid = userObj.get("id")?.takeIf { !it.isJsonNull }?.asLong
                     ?: o.get("user_id")?.takeIf { !it.isJsonNull }?.asLong
+                    ?: o.get("member_id")?.takeIf { !it.isJsonNull }?.asLong
                     ?: return@mapNotNull null
                 val banInfo = o.getAsJsonObject("ban_info")
                     ?: o.getAsJsonObject("banned_info")
@@ -23103,6 +23119,7 @@ class VKApiClient(
                     name = listOfNotNull(
                         userObj.get("first_name")?.takeIf { !it.isJsonNull }?.asString,
                         userObj.get("last_name")?.takeIf { !it.isJsonNull }?.asString,
+                        userObj.get("name")?.takeIf { !it.isJsonNull }?.asString,
                     ).joinToString(" ").ifBlank { "id$uid" },
                     photo100 = userObj.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
                     endDate = banInfo.get("end_date")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
