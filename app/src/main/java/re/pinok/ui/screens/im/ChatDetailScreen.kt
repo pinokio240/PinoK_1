@@ -7652,6 +7652,23 @@ private fun WallAttachmentCard(
     // long-press → вход в selection / context menu).
     val sel = LocalAttachmentSelection.current
 
+    // #WALL-CARD-GROUP-FETCH (2026-11-17): если группа поста (fromId<0) НЕ в
+    // profiles/groups картах (VK не вернул её в groups[] для messages.getHistory),
+    // добираем через groups.getById. Раньше → «Сообщество» вместо названия.
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var resolvedGroup by remember(post.fromId) {
+        mutableStateOf<re.pinok.api.VKApiClient.GroupInfo?>(null)
+    }
+    androidx.compose.runtime.LaunchedEffect(post.fromId) {
+        if (post.fromId < 0 && profiles[post.fromId] == null && groups[-post.fromId] == null && resolvedGroup == null) {
+            try {
+                val gid = -post.fromId
+                resolvedGroup = re.pinok.SovaApp.get(context).apiClient
+                    .groupsGetById(listOf(gid)).firstOrNull()
+            } catch (_: Exception) {}
+        }
+    }
+
     // --- Автор поста: fromId > 0 — пользователь, fromId < 0 — сообщество/канал. ---
     val isCommunity = post.fromId < 0
     // #WALL-CARD-GROUP-FIX: getHistory хранит группы в profiles map (как UserProfile
@@ -7661,8 +7678,9 @@ private fun WallAttachmentCard(
     // wall-владельцев) → аватар/имя НЕ показывались. Теперь проверяем ОБА:
     // 1) groups[-fromId] (GroupInfo — если заполнен отдельно, напр. для канала-пира)
     // 2) profiles[fromId] (UserProfile с отрицательным ID — из getHistory response.groups[])
+    // 3) resolvedGroup (groupsGetById fallback — если 1 и 2 null)
     val profile = profiles[post.fromId]  // fromId>0 — юзер; fromId<0 — группа (из getHistory)
-    val group = if (post.fromId < 0) groups[-post.fromId] else null
+    val group = if (post.fromId < 0) (groups[-post.fromId] ?: resolvedGroup) else null
     val authorAvatar: String? = when {
         group != null -> group.photoBase ?: group.photo100 ?: group.photo200
         profile != null -> profile.photo100 ?: profile.photo200
@@ -9798,8 +9816,13 @@ private fun ForwardedMessageBlock(
             ?.takeIf { it.isNotBlank() }
             ?: "id${fwd.fromId}"
     } else if (fwd.fromId < 0) {
-        val g = groups[-fwd.fromId]
-        g?.name?.takeIf { it.isNotBlank() } ?: "Сообщество"
+        // #WALL-CARD-GROUP-FIX: проверяем ОБА — groups[-fromId] (GroupInfo) И
+        // profiles[fromId] (UserProfile с отрицательным ID из getHistory groups[]).
+        // Раньше только groups[-fromId] → для регулярных чатов (groups map пуст)
+        // → всегда «Сообщество».
+        val gName = groups[-fwd.fromId]?.name?.takeIf { it.isNotBlank() }
+        val pName = profiles[fwd.fromId]?.firstName?.takeIf { it.isNotBlank() }
+        gName ?: pName ?: "Сообщество"
     } else {
         null
     }
