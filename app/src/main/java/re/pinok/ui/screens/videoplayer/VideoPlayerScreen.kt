@@ -4184,6 +4184,14 @@ private fun VideoCommentsSheet(
     var sharingComment by remember { mutableStateOf<Comment?>(null) }
     val currentUserId = remember { app.tokenStorage.load()?.userId ?: 0L }
 
+    // #VIDEO-REPLIES (2026-11-17): развёртывание веток ответов в комментариях видео.
+    // Паритет с PostDetailScreen. thread preview приходит из video.getComments
+    // (thread_items_count=10); если preview < totalCount — догружаем через
+    // video.getComments(comment_id=...).
+    var expandedReplies by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var threadReplies by remember { mutableStateOf<Map<Long, List<Comment>>>(emptyMap()) }
+    var loadingThreadFor by remember { mutableStateOf<Long?>(null) }
+
     // #NOTIF-UNIFORM-CARD (2026-11-05): запомненный статус — уже ли проматывали
     // к целевому комментарию (чтобы не скроллить заново после createComment/refresh).
     var hasScrolledToTarget by remember { mutableStateOf(false) }
@@ -4333,6 +4341,38 @@ private fun VideoCommentsSheet(
                                 onShareComment = { sharingComment = it },
                                 // FIX-B: проброс onUserClick → UserProfile.
                                 onUserClick = onUserClick,
+                                // #VIDEO-REPLIES: развёртывание ветки ответов.
+                                isExpanded = comment.id in expandedReplies,
+                                isLoadingReplies = loadingThreadFor == comment.id,
+                                extraReplies = threadReplies[comment.id] ?: emptyList(),
+                                onExpandThread = {
+                                    if (comment.id in expandedReplies) {
+                                        expandedReplies = expandedReplies - comment.id
+                                    } else {
+                                        expandedReplies = expandedReplies + comment.id
+                                        val previewCount = comment.thread?.items?.size ?: 0
+                                        val totalCount = comment.thread?.count ?: 0
+                                        if (previewCount < totalCount) {
+                                            loadingThreadFor = comment.id
+                                            scope.launch {
+                                                try {
+                                                    val r = app.apiClient.videoGetComments(
+                                                        ownerId = video.ownerId,
+                                                        videoId = video.id,
+                                                        count = 100,
+                                                        commentId = comment.id,
+                                                    )
+                                                    authors = authors + r.profiles
+                                                    threadReplies = threadReplies + (comment.id to r.comments)
+                                                } catch (e: Exception) {
+                                                    AppLog.e(TAG, "video thread replies error", e)
+                                                } finally {
+                                                    loadingThreadFor = null
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
                             )
                             HorizontalDivider(
                                 modifier = Modifier.padding(horizontal = 16.dp),

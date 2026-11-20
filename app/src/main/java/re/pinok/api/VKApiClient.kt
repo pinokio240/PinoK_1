@@ -4855,10 +4855,17 @@ class VKApiClient(
      * из groups[] — ОТРИЦАТЕЛЬНЫМ id (UserProfile с именем сообщества), чтобы UI
      * работал с одной картой авторов независимо от типа автора.
      */
-    suspend fun videoGetComments(ownerId: Long, videoId: Long, count: Int = 20): CommentsResult {
+    suspend fun videoGetComments(
+        ownerId: Long,
+        videoId: Long,
+        count: Int = 20,
+        // #VIDEO-REPLIES (2026-11-17): comment_id — получить ОТВЕТЫ на конкретный
+        // комментарий (thread). VK video.getComments поддерживает comment_id для
+        // получения replies. null — top-level комментарии.
+        commentId: Long? = null,
+    ): CommentsResult {
         if (isOffline()) return CommentsResult(emptyList(), emptyMap())
-        // Явная проверка вместо elvis — #NULL-EXPLICIT для нового кода фикса.
-        val json = call("video.getComments", mapOf(
+        val args = mutableMapOf(
             "owner_id" to ownerId.toString(),
             "video_id" to videoId.toString(),
             "count" to count.toString(),
@@ -4867,7 +4874,14 @@ class VKApiClient(
             // BUILD-COMMENT-LIKES: просим VK вернуть likes.count/user_likes
             // (паритет с boardGetCommentsFull / wallGetComments).
             "need_likes" to "1",
-        ))
+            // #VIDEO-REPLIES: thread_items_count — VK вернёт thread{count, items[]}
+            // (превью ответов) для top-level комментариев. Без этого thread отсутствует
+            // → кнопка «Показать ответы» не появляется.
+            "thread_items_count" to "10",
+        )
+        if (commentId != null) args["comment_id"] = commentId.toString()
+        // Явная проверка вместо elvis — #NULL-EXPLICIT для нового кода фикса.
+        val json = call("video.getComments", args)
         if (json == null) return CommentsResult(emptyList(), emptyMap())
         return try {
             val resp = json.getAsJsonObject("response")
