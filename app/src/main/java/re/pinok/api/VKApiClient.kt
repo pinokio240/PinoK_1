@@ -237,7 +237,7 @@ class VKApiClient(
         // prefs.data.first() зависал. privacyHideLastSeen теперь работает
         // только через accountSetOnline() no-op (не отправляем ping).
         val args = mutableMapOf(
-            "fields" to "photo_100,photo_200,online,last_seen,status,verified,counters",
+            "fields" to "photo_100,photo_200,online,last_seen,online_app,online_info,status,verified,counters",
         )
         if (userId != null) args["user_ids"] = userId.toString()
         val json = call("users.get", args) ?: return null
@@ -1334,7 +1334,7 @@ class VKApiClient(
             // (VK отдаёт их прямо в items[] при fields=). Для community-участников
             // (member_id < 0) эти поля отсутствуют — их берём из response.groups[].
             // #CHATINFO-VKWEB: online, last_seen для статусов участников.
-            "fields" to "photo_100,first_name,last_name,online,last_seen",
+            "fields" to "photo_100,first_name,last_name,online,last_seen,online_app,online_info",
         )
         val json = call("messages.getConversationMembers", args) ?: return emptyList()
         return try {
@@ -1437,7 +1437,7 @@ class VKApiClient(
             "count" to count.toString(),
             "rev" to "0",
             "extended" to "1",
-            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen,online_info",
+            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen,online_app,online_info",
         )
         if (offset > 0) args["offset"] = offset.toString()
         val json = call("messages.getHistory", args) ?: return emptyList()
@@ -1527,7 +1527,7 @@ class VKApiClient(
             "count" to count.toString(),
             "rev" to "0",
             "extended" to "1",
-            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen,online_info",
+            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen,online_app,online_info",
         )
         if (offset > 0) args["offset"] = offset.toString()
         // #IM-EMPTY-HONEST: null у call() = запрос не выполнен (VK API error,
@@ -1818,7 +1818,7 @@ class VKApiClient(
         val args = mutableMapOf(
             "peer_ids" to peerIds.joinToString(","),
             "extended" to "1",
-            "fields" to "photo_100,photo_200,online,last_seen",
+            "fields" to "photo_100,photo_200,online,last_seen,online_app,online_info",
         )
         // C6 (#ADMIN-CHATS): web HAR 2026-09-25 шлёт getConversationsById с
         // group_id — контекст сообщества (peer_ids=2000000001&group_id=<gid>).
@@ -1975,7 +1975,7 @@ class VKApiClient(
             "q" to query.trim(),
             "count" to count.toString(),
             "extended" to "1",
-            "fields" to "photo_100,photo_200,online,last_seen",
+            "fields" to "photo_100,photo_200,online,last_seen,online_app,online_info",
         )
         if (peerId != null) args["peer_id"] = peerId.toString()
         val json = call("messages.search", args) ?: return emptyList()
@@ -2045,7 +2045,7 @@ class VKApiClient(
             "q" to query.trim(),
             "count" to count.toString(),
             "extended" to "1",
-            "fields" to "photo_100,photo_200,online,last_seen",
+            "fields" to "photo_100,photo_200,online,last_seen,online_app,online_info",
         )) ?: return emptyList()  // NULL-ЯВНО (Gson)
         return try {
             val resp = json.getAsJsonObject("response") ?: return emptyList()  // NULL-ЯВНО (Gson)
@@ -2089,7 +2089,7 @@ class VKApiClient(
             "count" to count.toString(),
             "extended" to "1",
             "group_id" to groupId.toString(),
-            "fields" to "photo_100,photo_200,online,last_seen",
+            "fields" to "photo_100,photo_200,online,last_seen,online_app,online_info",
         ), forceWebGateway = true) ?: return emptyList()  // NULL-ЯВНО (Gson)
         return try {
             val resp = json.getAsJsonObject("response") ?: return emptyList()  // NULL-ЯВНО (Gson)
@@ -13780,6 +13780,29 @@ class VKApiClient(
 
     private fun parseUserProfileMini(o: JsonObject): UserProfile {
         val countersObj = o.get("counters")?.takeIf { obj -> obj.isJsonObject }?.asJsonObject
+        // #PLATFORM-ICON v5: online_app + online_info — derive platform если classic
+        // last_seen.platform отсутствует (VK web-токен). Приоритет: classic platform >
+        // online_app (app_id → platform) > online_info.is_mobile (mobile/desktop).
+        val oi = o.getAsJsonObject("online_info")
+        val classicOnline = safeInt(o.get("online"))
+        val oiOnline = oi?.get("is_online")?.takeIf { !it.isJsonNull }?.asBoolean == true
+        val finalOnline = if (classicOnline == 1 || oiOnline) 1 else 0
+        val onlineApp = o.get("online_app")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+        val appPlatform = onlineAppToPlatform(onlineApp)
+        val isMobile = oi?.get("is_mobile")?.takeIf { !it.isJsonNull }?.asBoolean
+        val mobilePlatform: Int? = when (isMobile) { true -> 4; false -> 7; null -> null }
+        val classicLastSeen = o.get("last_seen")?.takeIf { it.isJsonObject }?.asJsonObject?.let {
+            UserProfile.LastSeen(
+                time = safeLong(it.get("time")),
+                platform = it.get("platform")?.takeIf { x -> !x.isJsonNull }?.asInt,
+            )
+        }
+        val oiTime = oi?.get("last_seen")?.takeIf { !it.isJsonNull }?.asLong
+        val finalPlatform = classicLastSeen?.platform ?: appPlatform ?: mobilePlatform
+        val finalTime = classicLastSeen?.time ?: oiTime ?: 0L
+        val finalLastSeen = if (finalPlatform != null || finalTime != 0L) {
+            UserProfile.LastSeen(time = finalTime, platform = finalPlatform)
+        } else null
         return UserProfile(
             // P0.45-TRACER B5: safeString/safeLong guard от JsonNull + JsonObject/Array
             // (takeIf{!isJsonNull} НЕ гардит от ClassCastException на non-primitive).
@@ -13788,13 +13811,8 @@ class VKApiClient(
             lastName = safeString(o.get("last_name")) ?: "",
             photo100 = safeString(o.get("photo_100")),
             photo200 = safeString(o.get("photo_200")),
-            online = safeInt(o.get("online")),
-            lastSeen = o.get("last_seen")?.takeIf { it.isJsonObject }?.asJsonObject?.let {
-                UserProfile.LastSeen(
-                    time = safeLong(it.get("time")),
-                    platform = it.get("platform")?.takeIf { x -> !x.isJsonNull }?.asInt,
-                )
-            },
+            online = finalOnline,
+            lastSeen = finalLastSeen,
             status = safeString(o.get("status")),
             bdate = safeString(o.get("bdate")),
             city = o.get("city")?.takeIf { it.isJsonObject }?.asJsonObject?.let {
@@ -18713,7 +18731,7 @@ class VKApiClient(
     override suspend fun friendsGetOnline(userId: Long?): List<UserProfile> {
         if (isOffline()) return emptyList()
         val args = mutableMapOf(
-            "fields" to "photo_100,photo_200,online,last_seen",
+            "fields" to "photo_100,photo_200,online,last_seen,online_app,online_info",
             "order" to "random",
         )
         if (userId != null) args["user_id"] = userId.toString()
@@ -23048,20 +23066,23 @@ class VKApiClient(
             items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
-                val uid = o.get("id")?.takeIf { !it.isJsonNull }?.asLong
+                // VK API groups.getBanned: item = {type:"ban", ban_info:{...}, user:{id,first_name,...}}.
+                // Поля юзера ВНУТРИ user-подобъекта, НЕ на top-level. Раньше читали
+                // top-level → id/first_name null → все items skip → пустой список.
+                val userObj = o.getAsJsonObject("user")?.takeIf { it.isJsonObject } ?: o
+                val uid = userObj.get("id")?.takeIf { !it.isJsonNull }?.asLong
                     ?: o.get("user_id")?.takeIf { !it.isJsonNull }?.asLong
                     ?: return@mapNotNull null
-                // ban-метаданные: обычно плоско в item, у некоторых версий — ban_info/banned_info.
                 val banInfo = o.get("ban_info")?.takeIf { it.isJsonObject }?.asJsonObject
                     ?: o.get("banned_info")?.takeIf { it.isJsonObject }?.asJsonObject
                     ?: o
                 BannedUser(
                     userId = uid,
                     name = listOfNotNull(
-                        o.get("first_name")?.takeIf { !it.isJsonNull }?.asString,
-                        o.get("last_name")?.takeIf { !it.isJsonNull }?.asString,
+                        userObj.get("first_name")?.takeIf { !it.isJsonNull }?.asString,
+                        userObj.get("last_name")?.takeIf { !it.isJsonNull }?.asString,
                     ).joinToString(" ").ifBlank { "id$uid" },
-                    photo100 = o.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
+                    photo100 = userObj.get("photo_100")?.takeIf { !it.isJsonNull }?.asString,
                     endDate = banInfo.get("end_date")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
                     reason = banInfo.get("reason")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
                     comment = banInfo.get("comment")?.takeIf { !it.isJsonNull }?.asString,
