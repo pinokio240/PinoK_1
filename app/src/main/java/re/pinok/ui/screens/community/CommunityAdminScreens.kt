@@ -911,6 +911,7 @@ fun AdminPeopleScreen(
                 val list = app.apiClient.groupsGetBanned(groupId)
                 // NULL-ЯВНО: пустой список + живая API-ошибка — НЕ «ЧС пуст».
                 val err = app.apiClient.lastApiError
+                AppLog.i("AdminPeople", "loadBanned: groupId=$groupId size=${list.size} err=$err")
                 if (list.isEmpty() && !err.isNullOrBlank()) {
                     bannedError = err
                 } else {

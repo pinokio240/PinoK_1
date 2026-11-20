@@ -22630,7 +22630,8 @@ class VKApiClient(
             "user_id" to userId.toString(),
         )
         if (role == null) args["remove"] = "1" else args["role"] = role
-        val json = call("groups.editManager", args) ?: return false
+        // #ADMIN-WEB-GW: web-токен требует web gateway для admin-методов.
+        val json = call("groups.editManager", args, forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -23054,12 +23055,14 @@ class VKApiClient(
     /** W35-b: groups.getBanned — чёрный список сообщества. */
     suspend fun groupsGetBanned(groupId: Long, count: Int = 50, offset: Int = 0): List<BannedUser> {
         if (isOffline()) return emptyList()
+        // #ADMIN-WEB-GW: groups.getBanned через web.api.vk.ru — web-токен (vk1.a.*)
+        // на classic gateway возвращает err=3/5 для admin-методов.
         val json = call("groups.getBanned", mapOf(
             "group_id" to groupId.toString(),
             "count" to count.toString(),
             "offset" to offset.toString(),
             "fields" to "photo_100,first_name,last_name",
-        )) ?: return emptyList()
+        ), forceWebGateway = true) ?: return emptyList()
         return try {
             val resp = json.getAsJsonObject("response") ?: return emptyList()
             val items = resp.getAsJsonArray("items") ?: return emptyList()
@@ -23114,17 +23117,19 @@ class VKApiClient(
             "end_date" to endDate.toString(),
         )
         if (!comment.isNullOrBlank()) args["comment"] = comment
-        val json = call("groups.banUser", args) ?: return false
+        // #ADMIN-WEB-GW: web-токен требует web gateway для admin-методов.
+        val json = call("groups.banUser", args, forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
     /** W35-b: groups.unbanUser — разбан пользователя. */
     suspend fun groupsUnbanUser(groupId: Long, userId: Long): Boolean {
         if (isOffline()) return false
+        // #ADMIN-WEB-GW: web-токен требует web gateway для admin-методов.
         val json = call("groups.unbanUser", mapOf(
             "group_id" to groupId.toString(),
             "owner_id" to userId.toString(),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -23282,12 +23287,13 @@ class VKApiClient(
     /** W35-b: groups.getRequests — заявки на вступление. */
     suspend fun groupsGetRequests(groupId: Long, count: Int = 50, offset: Int = 0): List<UserProfile> {
         if (isOffline()) return emptyList()
+        // #ADMIN-WEB-GW: web-токен требует web gateway для admin-методов.
         val json = call("groups.getRequests", mapOf(
             "group_id" to groupId.toString(),
             "count" to count.toString(),
             "offset" to offset.toString(),
-            "fields" to "photo_100,photo_200,online,last_seen,status,verified",
-        )) ?: return emptyList()
+            "fields" to "photo_100,photo_200,online,last_seen,online_app,online_info,status,verified",
+        ), forceWebGateway = true) ?: return emptyList()
         return try {
             val items = json.getAsJsonObject("response")?.getAsJsonArray("items") ?: return emptyList()
             items.mapNotNull { el ->
