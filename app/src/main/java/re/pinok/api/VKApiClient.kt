@@ -23083,15 +23083,20 @@ class VKApiClient(
             items.mapNotNull { el ->
                 if (!el.isJsonObject) return@mapNotNull null
                 val o = el.asJsonObject
-                // VK API groups.getBanned: item = {type:"ban", ban_info:{...}, user:{id,first_name,...}}.
-                // Поля юзера ВНУТРИ user-подобъекта, НЕ на top-level. Раньше читали
-                // top-level → id/first_name null → все items skip → пустой список.
-                val userObj = o.getAsJsonObject("user")?.takeIf { it.isJsonObject } ?: o
+                // VK API groups.getBanned: item = {type:"ban"/"group", ban_info:{...},
+                // profile:{id,first_name,...} (для юзеров) ИЛИ group:{id,name,...} (для
+                // забаненных сообществ)}. Раньше искали top-level → null → пустой список.
+                // Потом искали "user" → тоже null (VK использует "profile", не "user").
+                // Fenrir VKApiBanned: @SerialName("profile") + @SerialName("group").
+                val userObj = o.getAsJsonObject("profile")?.takeIf { it.isJsonObject }
+                    ?: o.getAsJsonObject("user")?.takeIf { it.isJsonObject }
+                    ?: o.getAsJsonObject("group")?.takeIf { it.isJsonObject }
+                    ?: o
                 val uid = userObj.get("id")?.takeIf { !it.isJsonNull }?.asLong
                     ?: o.get("user_id")?.takeIf { !it.isJsonNull }?.asLong
                     ?: return@mapNotNull null
-                val banInfo = o.get("ban_info")?.takeIf { it.isJsonObject }?.asJsonObject
-                    ?: o.get("banned_info")?.takeIf { it.isJsonObject }?.asJsonObject
+                val banInfo = o.getAsJsonObject("ban_info")
+                    ?: o.getAsJsonObject("banned_info")
                     ?: o
                 BannedUser(
                     userId = uid,
@@ -23132,7 +23137,8 @@ class VKApiClient(
         )
         if (!comment.isNullOrBlank()) args["comment"] = comment
         // #ADMIN-WEB-GW: web-токен требует web gateway для admin-методов.
-        val json = call("groups.banUser", args, forceWebGateway = true) ?: return false
+        // VK API: groups.ban (не banUser — banUser deprecated). Fenrir использует groups.ban.
+        val json = call("groups.ban", args, forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -23140,7 +23146,8 @@ class VKApiClient(
     suspend fun groupsUnbanUser(groupId: Long, userId: Long): Boolean {
         if (isOffline()) return false
         // #ADMIN-WEB-GW: web-токен требует web gateway для admin-методов.
-        val json = call("groups.unbanUser", mapOf(
+        // VK API: groups.unban (не unbanUser — unbanUser deprecated). Fenrir использует groups.unban.
+        val json = call("groups.unban", mapOf(
             "group_id" to groupId.toString(),
             "owner_id" to userId.toString(),
         ), forceWebGateway = true) ?: return false
