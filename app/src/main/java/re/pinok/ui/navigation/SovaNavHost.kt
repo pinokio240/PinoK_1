@@ -2071,6 +2071,13 @@ fun SovaNavHost(
                         onSubscriptionsClick = { userId ->
                             nav.navigate(Screen.FollowList.buildRoute(userId, Screen.FollowList.MODE_SUBSCRIPTIONS))
                         },
+                        // #PLAYLIST-FIX-ALL: тап по плейлисту-вложению поста стены
+                        // профиля → PlaylistDetailScreen (паттерн FeedScreen/
+                        // CommunityScreen). Раньше onOpenPlaylist не пробрасывался
+                        // в ProfileScreen → WallPostCard → PostCard → no-op.
+                        onOpenPlaylist = { ownerId, playlistId, accessKey ->
+                            nav.navigate(Screen.PlaylistDetail.buildRoute(ownerId, playlistId, accessKey))
+                        },
                     )
                 }
                 // П-3 (#PROFILE-SNAP): редактор профиля — свой Scaffold+TopAppBar
@@ -3309,6 +3316,13 @@ composable(Screen.CallsHistory.route) {
                         },
                         onUserClick = { userId ->
                             nav.navigate(Screen.UserProfile.buildRoute(userId))
+                        },
+                        // #PLAYLIST-FIX-ALL: тап по плейлисту-вложению поста чужой
+                        // стены → PlaylistDetailScreen (паттерн ProfileScreen/
+                        // FeedScreen). Раньше onOpenPlaylist не пробрасывался в
+                        // UserProfileScreen → WallPostCard → PostCard → no-op.
+                        onOpenPlaylist = { ownerId, playlistId, accessKey ->
+                            nav.navigate(Screen.PlaylistDetail.buildRoute(ownerId, playlistId, accessKey))
                         },
                     )
                 }

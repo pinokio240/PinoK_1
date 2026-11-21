@@ -218,6 +218,12 @@ fun ProfileScreen(
     onFriendsClick: () -> Unit = {},
     onFollowersClick: (Long) -> Unit = {},
     onSubscriptionsClick: (Long) -> Unit = {},
+    // #PLAYLIST-FIX-ALL (#PLAYLIST-OPEN-NOT-PLAY): колбэк открытия экрана
+    // плейлиста (audio_playlist-вложение поста стены). SovaNavHost передаёт
+    // nav-колбэк (Screen.PlaylistDetail.buildRoute). Дефолт {} — легаси-вызовы
+    // не меняют поведение; здесь non-nullable-обёртка, в PostCard принимается
+    // как nullable (default null), см. WallPostCard.
+    onOpenPlaylist: (ownerId: Long, playlistId: Long, accessKey: String?) -> Unit = { _, _, _ -> },
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -1728,6 +1734,10 @@ fun ProfileScreen(
                     // показывается, как в VK). Управление — через showReport.
                     showReport = post.ownerId != p.id,
                     onReportSpam = { reportingPost.value = it },
+                    // #PLAYLIST-FIX-ALL: проброс nav-колбэка открытия плейлиста
+                    // (audio_playlist-вложение поста стены) в WallPostCard → PostCard
+                    // → PostAttachmentRenderer → PlaylistAttachmentCard.
+                    onOpenPlaylist = onOpenPlaylist,
                 )
                 Box(
                     modifier = Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 16.dp)
@@ -3012,6 +3022,12 @@ fun WallPostCard(
     // (не зависит от showActions/manage-прав), чтобы любой пост на стене
     // профиля можно было добавить в закладки. Дефолт {} — легаси-вызовы.
     onToggleBookmark: (Post) -> Unit = {},
+    // #PLAYLIST-OPEN-NOT-PLAY (#PLAYLIST-FIX-ALL): колбэк открытия экрана
+    // плейлиста (audio_playlist-вложение поста/репоста стены). null = тап no-op.
+    // Пробрасывается в PostCard → PostAttachmentRenderer → PlaylistAttachmentCard.
+    // ProfileScreen/UserProfileScreen получают nav-колбэк из SovaNavHost
+    // (Screen.PlaylistDetail.buildRoute); ChatDetailScreen — пока default null.
+    onOpenPlaylist: ((ownerId: Long, playlistId: Long, accessKey: String?) -> Unit)? = null,
 ) {
     // POSTCARD-REFACTOR-PLAN (этап 3c): WallPostCard — ОБЁРТКА-ДЕЛЕГАТ единого
     // PostCard (ui/components/PostCard.kt). Внешняя сигнатура сохранена 1:1 —
@@ -3149,6 +3165,9 @@ fun WallPostCard(
         repostGroupName = repostGroupName,
         repostGroupPhoto = repostGroupPhoto,
         onRepostGroupClick = onRepostGroupClick,
+        // #PLAYLIST-FIX-ALL: проброс onOpenPlaylist в PostCard → PostAttachmentRenderer
+        // → PlaylistAttachmentCard. null (default) — тап по плейлисту-вложению no-op.
+        onOpenPlaylist = onOpenPlaylist,
     )
 }
 

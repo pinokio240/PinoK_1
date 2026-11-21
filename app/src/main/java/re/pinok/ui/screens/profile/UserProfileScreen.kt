@@ -194,6 +194,11 @@ fun UserProfileScreen(
     // Дефолты {} — легаси-вызовы не меняют поведение.
     onGroupClick: (Long) -> Unit = {},
     onUserClick: (Long) -> Unit = {},
+    // #PLAYLIST-FIX-ALL (#PLAYLIST-OPEN-NOT-PLAY): колбэк открытия экрана
+    // плейлиста (audio_playlist-вложение поста чужой стены). SovaNavHost
+    // передаёт nav-колбэк (Screen.PlaylistDetail.buildRoute). Дефолт {} —
+    // легаси-вызовы не меняют поведение.
+    onOpenPlaylist: (ownerId: Long, playlistId: Long, accessKey: String?) -> Unit = { _, _, _ -> },
 ) {
     val app = SovaApp.get()
     val scope = rememberCoroutineScope()
@@ -1398,6 +1403,10 @@ fun UserProfileScreen(
                     // своём профиле) → меню открывается с одним «Пожаловаться».
                     showReport = !isSelf,
                     onReportSpam = { reportingPost.value = it },
+                    // #PLAYLIST-FIX-ALL: проброс nav-колбэка открытия плейлиста
+                    // (audio_playlist-вложение поста чужой стены) в WallPostCard
+                    // → PostCard → PostAttachmentRenderer → PlaylistAttachmentCard.
+                    onOpenPlaylist = onOpenPlaylist,
                 )
             }
             // Fix #86: футер пагинации.

@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
@@ -38,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -54,6 +56,7 @@ import coil3.compose.AsyncImage
 import re.pinok.data.model.PlayerState
 import re.pinok.data.model.Track
 import re.pinok.media.PlayerConnection
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
@@ -86,6 +89,9 @@ fun AudioQueueScreen(
     BackHandler { onBack() }
 
     val context = LocalContext.current
+    // #QUEUE-GOTO-CURRENT (#PLAYLIST-FIX-ALL): корутин-скоуп для кнопки
+    // «К текущему треку» (scrollToItem по currentIndex в LazyColumn ниже).
+    val scope = rememberCoroutineScope()
     val playerState by PlayerConnection.playerState.collectAsState()
 
     val vkBlack = Color(0xFF0F0F10)
@@ -149,6 +155,27 @@ fun AudioQueueScreen(
             } else {
                 Spacer(modifier = Modifier.weight(1f))
             }
+            // #QUEUE-GOTO-CURRENT (#PLAYLIST-FIX-ALL): кнопка «К текущему треку» —
+            // скроллит список к играющему треку (currentIndex). Полезно, когда
+            // пользователь пролистал очередь и хочет вернуться к текущей позиции.
+            // Кнопка активна только при валидном currentIndex (>= 0 и в пределах
+            // очереди); иначе disabled, чтобы не «прыгать» в пустоту пустой очереди.
+            val canGotoCurrent = currentIndex >= 0 && currentIndex < queue.size
+            IconButton(
+                onClick = {
+                    if (canGotoCurrent) {
+                        scope.launch { listState.scrollToItem(currentIndex) }
+                    }
+                },
+                enabled = canGotoCurrent,
+            ) {
+                Icon(
+                    Icons.Filled.CenterFocusStrong,
+                    contentDescription = "К текущему треку",
+                    tint = if (canGotoCurrent) vkTextPrimary else vkTextSecondary,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
             Text(
                 text = "Сохранить как плейлист",
                 color = vkAccent,
@@ -167,8 +194,15 @@ fun AudioQueueScreen(
         // Раньше 80dp резервировали место под нижнюю панель контролов — но
         // панель теперь в Column-flow (не overlay), список её не перекрывает.
         // 80dp давали лишний пустой хвост при скролле.
+        // #QUEUE-GOTO-CURRENT (#PLAYLIST-FIX-ALL): state = listState — ОБЯЗАТЕЛЬНО,
+        // иначе LaunchedEffect.scrollToItem(currentIndex) выше и кнопка «К текущему
+        // треку» в TopBar скроллили бы свой несвязанный state, а не видимую
+        // LazyColumn. Раньше state не передавался → стартовый скролл к текущему
+        // треку (стр.107) НЕ срабатывал (см. repro: длинная очередь открывалась
+        // на первом треке, а не на играющем).
         LazyColumn(
             modifier = Modifier.fillMaxSize().weight(1f),
+            state = listState,
             contentPadding = PaddingValues(bottom = 16.dp),
         ) {
             if (queue.isEmpty()) {
