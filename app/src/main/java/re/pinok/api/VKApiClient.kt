@@ -6852,7 +6852,17 @@ class VKApiClient(
             }.toString()
             args["forward"] = forwardJson
         }
-        val json = call("messages.send", args) ?: return -1L
+        // #REPLY-WEB-GW: web-токен (vk1.a.*) для messages.send с forward (reply)
+        // — используем web gateway (forceWebGateway=true) когда есть replyCmid.
+        // Без reply — classic gateway (как раньше).
+        val json = if (replyCmid != null && replyCmid > 0) {
+            call("messages.send", args, forceWebGateway = true)
+        } else {
+            call("messages.send", args)
+        } ?: run {
+            AppLog.w("VKApiClient", "messagesSend: call()=null err=${lastApiError} replyCmid=$replyCmid")
+            return -1L
+        }
         return try {
             json.getAsJsonObject("response")?.getAsJsonArray("items")
                 ?.firstOrNull()?.asJsonObject?.get("message_id")?.asLong

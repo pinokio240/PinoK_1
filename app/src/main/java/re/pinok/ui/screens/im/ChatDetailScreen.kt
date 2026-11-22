@@ -679,11 +679,18 @@ private suspend fun enrichProfilesWithPlatform(
         var withPlatform = 0
         var withOnline = 0
         enriched.forEach { (id, profile) ->
-            // Smart-cast fix: profile.lastSeen — public val из :core:data (другой
-            // модуль) → Kotlin не смарт-кастит после null-check. Захват в локальный val.
+            // Smart-cast fix + MERGE (не REPLACE): сохраняем оригинальный профиль
+            // (firstName/lastName/photo из messages.getHistory), добавляем ТОЛЬКО
+            // lastSeen/online из enriched. Раньше REPLACЕ полностью → если enriched
+            // имел пустое firstName, имя отправителя исчезало.
             val ls = profile.lastSeen
             if (ls != null) {
-                merged[id] = profile
+                val original = merged[id]
+                if (original != null) {
+                    merged[id] = original.copy(lastSeen = ls, online = profile.online)
+                } else {
+                    merged[id] = profile
+                }
                 if (ls.platform != null) withPlatform++
             }
             if (profile.online == 1) withOnline++
