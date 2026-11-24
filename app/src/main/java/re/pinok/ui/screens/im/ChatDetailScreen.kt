@@ -657,6 +657,36 @@ private const val MSG_TEXT_LIMIT = 4096
 private enum class SendButtonState { SUBMIT, MIC, EDIT, LOADING, LIMIT }
 
 /**
+ * #SENDER-FIX (2026-11-17): fetch профилей для ОТПРАВИТЕЛЕЙ, отсутствующих в
+ * profiles map. Fenrir подход: message.sender = owners.getById(from_id) — EMBEDDED
+ * в Message. PinoK: chatProfiles[fromId] lookup — если VK не вернул профиль в
+ * profiles[] (груп-чаты, большой список), sender = null → имя/аватар не показываются.
+ * Фикс: собираем ВСЕ fromId из messages БЕЗ профиля → usersGetByIds → merge.
+ */
+private suspend fun fetchMissingSenderProfiles(
+    apiClient: re.pinok.api.VKApiClient,
+    messages: List<re.pinok.data.model.Message>,
+    profiles: Map<Long, UserProfile>,
+): Map<Long, UserProfile> {
+    val missingIds = messages.mapNotNull { m ->
+        if (m.fromId > 0 && m.fromId != 0L && !profiles.containsKey(m.fromId)) m.fromId else null
+    }.distinct()
+    if (missingIds.isEmpty()) return profiles
+    return try {
+        val fetched = apiClient.usersGetByIds(missingIds)
+        val merged = profiles.toMutableMap()
+        fetched.forEach { (id, profile) ->
+            merged[id] = profile
+        }
+        AppLog.i("ChatDetailScreen", "#SENDER-FIX: missing=${missingIds.size} fetched=${fetched.size}")
+        merged
+    } catch (e: Exception) {
+        AppLog.w("ChatDetailScreen", "fetchMissingSenderProfiles failed: ${e.message}")
+        profiles
+    }
+}
+
+/**
  * #PLATFORM-ICON (2026-11-17): enrich профилей чата last_seen'ом.
  * messages.getHistory extended=1 НЕ отдаёт last_seen в profiles[] (VK игнорирует
  * fields=last_seen для этого метода) → UserProfile.lastSeen null → иконка
@@ -2550,7 +2580,7 @@ fun ChatDetailScreen(
                 val fresh = result.messages.distinctBy { it.id }
                 if (fresh.isNotEmpty() || result.failure == null) {
                     messages = fresh
-                    chatProfiles = enrichProfilesWithPlatform(app.apiClient, result.profiles)
+                    chatProfiles = enrichProfilesWithPlatform(app.apiClient, fetchMissingSenderProfiles(app.apiClient, result.messages, result.profiles))
                     if (fresh.size < pageSize) endReached = true
                     channelWallFallback = true
                     channelPostsError = null
@@ -2619,7 +2649,7 @@ fun ChatDetailScreen(
                             "failure=${ch.failure} peerId=$peerId filter=$channelFeedFilter")
                     if (ch.messages.isNotEmpty()) {
                         messages = ch.messages
-                        chatProfiles = enrichProfilesWithPlatform(app.apiClient, ch.profiles)
+                        chatProfiles = enrichProfilesWithPlatform(app.apiClient, fetchMissingSenderProfiles(app.apiClient, ch.messages, ch.profiles))
                         if (ch.messages.size < pageSize) endReached = true
                         channelHistoryMode = true
                         channelWallFallback = true
@@ -3312,7 +3342,7 @@ fun ChatDetailScreen(
             // #74: используем messagesGetHistoryWithProfiles — возвращает профили для аватарок
             val result = app.apiClient.messagesGetHistoryWithProfiles(peerId, count = pageSize)
             messages = result.messages.distinctBy { it.id }
-            chatProfiles = enrichProfilesWithPlatform(app.apiClient, result.profiles)
+            chatProfiles = enrichProfilesWithPlatform(app.apiClient, fetchMissingSenderProfiles(app.apiClient, result.messages, result.profiles))
             if (result.messages.size < pageSize) endReached = true
             if (result.messages.isEmpty()) {
                 // #IM-EMPTY-HONEST (волна 36): failure от VKApiClient имеет
@@ -3625,7 +3655,7 @@ fun ChatDetailScreen(
                 )
                 if (ch.messages.isNotEmpty()) {
                     messages = ch.messages
-                    chatProfiles = enrichProfilesWithPlatform(app.apiClient, ch.profiles)
+                    chatProfiles = enrichProfilesWithPlatform(app.apiClient, fetchMissingSenderProfiles(app.apiClient, ch.messages, ch.profiles))
                     if (ch.messages.size < pageSize) endReached = true
                     channelPostsError = null
                 } else if (ch.failure == null) {
