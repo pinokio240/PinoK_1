@@ -6381,21 +6381,28 @@ private fun MessageBubble(
     // #CHAT-APPEARANCE: если включён независимый шрифт диалога и выбран цвет текста —
     // переопределяем цвет текста сообщения со всех пузырей (исходящих и входящих).
     val chatTextColorOverride = LocalChatAppearance.current.textColor
-    // FIX-3 (BUILD-READMARK-BUBBLE-FIX): адаптивный textColor под luminance(bubbleColor).
-    // Если выбран светлый кастомный bubbleColor — текст onPrimary (белый) становится
-    // невидимым. Светлый (luminance > 0.5) → onSurface (тёмный). bubbleless — всегда
-    // onSurface (нет яркого bubble-фона).
+    // FIX-3 (BUILD-READMARK-BUBBLE-FIX) + #REPLY-CARD-INVISIBLE (2026-11-24):
+    // Адаптивный textColor под luminance(bubbleColor). Раньше luminance-чек
+    // применялся ТОЛЬКО к appearance.bubbleColor (кастомный цвет пузыря) — если
+    // он null (дефолт, нет кастомного цвета), проверка скипалась, и для светлого
+    // системного акцента (Lime #C0CA33, Cyan #00ACC1 и т.п.) textColor = onPrimary
+    // (белый) → текст и плашка ответа становились НЕВИДИМЫМИ на светлом bubble.
+    // При этом Row плашки ответа рендерился (combinedClickable работал → тап
+    // скроллил к исходному сообщению), но визуально контент был пуст.
+    //
+    // Фикс: проверяем luminance ЭФФЕКТИВНОГО bubbleColor (custom OR system
+    // primary/surfaceVariant). Светлый bubble (luminance > 0.5) → чёрный текст
+    // (Color.Black, не onSurface — onSurface в dark theme = белый, что тоже
+    // невидимо на светлом bubble). Тёмный bubble → onPrimary/onSurfaceVariant.
     val textColor = if (chatTextColorOverride != null) {
         chatTextColorOverride
     } else if (bubbleless) {
         MaterialTheme.colorScheme.onSurface
     } else if (isOut) {
-        val bc = appearance.bubbleColor
-        if (bc != null && bc.luminance() > 0.5f) MaterialTheme.colorScheme.onSurface
+        if (bubbleColor.luminance() > 0.5f) Color(0xFF000000)
         else MaterialTheme.colorScheme.onPrimary
     } else {
-        val bc = appearance.bubbleColor
-        if (bc != null && bc.luminance() > 0.5f) MaterialTheme.colorScheme.onSurface
+        if (bubbleColor.luminance() > 0.5f) Color(0xFF000000)
         else MaterialTheme.colorScheme.onSurfaceVariant
     }
     val time = message.date.toMsgTime()
@@ -6742,8 +6749,10 @@ private fun MessageBubble(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 4.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(textColor.copy(alpha = 0.1f))
+                            .clip(RoundedCornerShape(6.dp))
+                            // #REPLY-CARD-INVISIBLE: alpha 0.1 → 0.18 — фон плашки
+                            // ответа был почти невидим (особенно на светлых bubble).
+                            .background(textColor.copy(alpha = 0.18f))
                             .combinedClickable(
                                 onClick = {
                                     // Fix #244: в selection mode — toggle, не открываем цель ответа.
@@ -6757,24 +6766,26 @@ private fun MessageBubble(
                     ) {
                         Box(
                             modifier = Modifier
-                                .width(2.dp)
-                                .height(24.dp)
-                                .background(textColor.copy(alpha = 0.5f))
+                                .width(3.dp)
+                                .height(28.dp)
+                                // #REPLY-CARD-INVISIBLE: alpha 0.5 → 0.7, ширина 2→3dp —
+                                // левая полоса-индикатор ответа была слишком блёклой.
+                                .background(textColor.copy(alpha = 0.7f))
                         )
-                        Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.width(8.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = replyAuthorName ?: "Ответ",
                                 style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Medium,
-                                color = textColor.copy(alpha = 0.85f),
+                                fontWeight = FontWeight.SemiBold,
+                                color = textColor.copy(alpha = 0.95f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
                                 text = replyPreviewText,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = textColor.copy(alpha = 0.7f),
+                                color = textColor.copy(alpha = 0.75f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -6820,11 +6831,12 @@ private fun MessageBubble(
                     // P5.1: текст с кликабельными ссылками (LinkAnnotation.Clickable).
                     // linkColor: на исходящем цветном bubble — onPrimary (видно),
                     // на входящем/bubbleless — primary (accent).
-                    // FIX-3 (BUILD-READMARK-BUBBLE-FIX): светлый кастомный bubbleColor →
-                    // primary (accent) виднее, чем onPrimary (белый на белом).
+                    // FIX-3 + #REPLY-CARD-INVISIBLE: luminance ЭФФЕКТИВНОГО bubbleColor
+                    // (custom OR system primary) — светлый bubble → primary (accent),
+                    // иначе onPrimary. Раньше только custom bubbleColor проверялся →
+                    // светлый системный акцент (Lime/Cyan) → onPrimary (белый) = невидимые ссылки.
                     val linkColor = if (isOut && !bubbleless) {
-                        val bc = appearance.bubbleColor
-                        if (bc != null && bc.luminance() > 0.5f) MaterialTheme.colorScheme.primary
+                        if (bubbleColor.luminance() > 0.5f) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onPrimary
                     } else {
                         MaterialTheme.colorScheme.primary

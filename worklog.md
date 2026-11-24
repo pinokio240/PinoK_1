@@ -25061,3 +25061,25 @@ CommunityAdminScreens, ClipsFeedScreen (v5-sweep).
 ## Проверка
 - Сборка не запускалась (пользователь собирает сам).
 - Бэкап: backups/2026-11-23_chat-video-fixes/
+## #REPLY-CARD-INVISIBLE (2026-11-24)
+
+**Симптом**: в чатах при ответе на сообщение плашка ответа (reply card) не
+отображается визуально, но тап по области где она должна быть скроллит к
+исходному сообщению.
+
+**Корень**: textColor в MessageBubble проверял luminance ТОЛЬКО кастомного
+appearance.bubbleColor. Если он null (дефолт, нет кастомного цвета пузыря) —
+luminance-чек скипался, и для светлого системного акцента (Lime #C0CA33,
+Cyan #00ACC1) textColor = onPrimary (белый) → невидимый текст/плашка на
+светлом bubble. Row плашки рендерился (combinedClickable → тап работал), но
+визуально контент был пуст.
+
+**Фикс**:
+1. textColor: luminance ЭФФЕКТИВНОГО bubbleColor (custom OR system primary/
+   surfaceVariant). Светлый bubble → Color(0xFF000000) (не onSurface —
+   onSurface в dark theme = белый). Тёмный → onPrimary/onSurfaceVariant.
+2. Плашка ответа: bg alpha 0.1→0.18, левая полоса alpha 0.5→0.7 / 2→3dp /
+   24→28dp, corner 4→6dp, автор SemiBold 0.95, preview 0.75.
+3. linkColor: тот же luminance-фикс (ссылки в тексте на светлом bubble).
+
+Файл: ChatDetailScreen.kt (MessageBubble textColor + reply card + linkColor).
