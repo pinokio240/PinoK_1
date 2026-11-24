@@ -662,15 +662,30 @@ private enum class SendButtonState { SUBMIT, MIC, EDIT, LOADING, LIMIT }
  * в Message. PinoK: chatProfiles[fromId] lookup — если VK не вернул профиль в
  * profiles[] (груп-чаты, большой список), sender = null → имя/аватар не показываются.
  * Фикс: собираем ВСЕ fromId из messages БЕЗ профиля → usersGetByIds → merge.
+ *
+ * #REPLY-EMPTY-FIX (2026-11-24): также добираем профили для авторов reply_message
+ * и fwd_messages — иначе плашка ответа показывает «Ответ» вместо имени автора.
  */
 private suspend fun fetchMissingSenderProfiles(
     apiClient: re.pinok.api.VKApiClient,
     messages: List<re.pinok.data.model.Message>,
     profiles: Map<Long, UserProfile>,
 ): Map<Long, UserProfile> {
-    val missingIds = messages.mapNotNull { m ->
-        if (m.fromId > 0 && m.fromId != 0L && !profiles.containsKey(m.fromId)) m.fromId else null
-    }.distinct()
+    // #REPLY-EMPTY-FIX: собираем fromId из сообщений + reply_message.fromId + fwd.fromId.
+    val allFromIds = mutableSetOf<Long>()
+    for (m in messages) {
+        if (m.fromId > 0) allFromIds.add(m.fromId)
+        // #REPLY-EMPTY-FIX: автор ответа (reply_message).
+        val rm = m.replyMessage
+        if (rm != null && rm.fromId > 0) allFromIds.add(rm.fromId)
+        // #REPLY-EMPTY-FIX: авторы пересланных сообщений (fwd_messages).
+        m.fwdMessages?.forEach { fwd ->
+            if (fwd.fromId > 0) allFromIds.add(fwd.fromId)
+            // Рекурсивно: reply внутри fwd.
+            fwd.replyMessage?.let { r2 -> if (r2.fromId > 0) allFromIds.add(r2.fromId) }
+        }
+    }
+    val missingIds = allFromIds.filter { !profiles.containsKey(it) }.distinct()
     if (missingIds.isEmpty()) return profiles
     return try {
         val fetched = apiClient.usersGetByIds(missingIds)
@@ -678,7 +693,7 @@ private suspend fun fetchMissingSenderProfiles(
         fetched.forEach { (id, profile) ->
             merged[id] = profile
         }
-        AppLog.i("ChatDetailScreen", "#SENDER-FIX: missing=${missingIds.size} fetched=${fetched.size}")
+        AppLog.i("ChatDetailScreen", "#SENDER-FIX: missing=${missingIds.size} fetched=${fetched.size} (incl reply/fwd authors)")
         merged
     } catch (e: Exception) {
         AppLog.w("ChatDetailScreen", "fetchMissingSenderProfiles failed: ${e.message}")

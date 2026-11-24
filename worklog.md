@@ -25083,3 +25083,26 @@ Cyan #00ACC1) textColor = onPrimary (белый) → невидимый текс
 3. linkColor: тот же luminance-фикс (ссылки в тексте на светлом bubble).
 
 Файл: ChatDetailScreen.kt (MessageBubble textColor + reply card + linkColor).
+
+## #REPLY-EMPTY-FIX (2026-11-24)
+
+**Симптом**: плашка ответа видна (#REPLY-CARD-INVISIBLE сработал), но содержимое
+«Ответ / Пустое сообщение» — reply.text="" и reply.attachments=null,
+replyAuthorName=null → fallback «Ответ».
+
+**Корень 1**: parseMessage (для reply_message/fwd) НЕ имел fallback user_id→from_id
+и body→text (Fenrir имеет). VK API в некоторых сценариях возвращает reply_message
+с legacy-ключами → fromId=0, text="" → профиль не найден, превью пустое.
+Фикс: fallback user_id→from_id, body→text (Fenrir MessageDtoAdapter паритет).
+
+**Корень 2**: fetchMissingSenderProfiles собирал только message.fromId — НЕ добирал
+профили для reply_message.fromId и fwd_messages[].fromId → автор ответа не найден
+в chatProfiles → «Ответ» вместо имени.
+Фикс: собираем fromId из сообщений + reply_message + fwd_messages (рекурсивно).
+
+**Диагностика**: #REPLY-EMPTY-DIAG — лог в parseMessage: id, from_id, user_id,
+textLen, hasBody, attachments count, keys. Покажет что VK реально отдаёт в
+reply_message. Если text/atts действительно пустые — нужен follow-up: fetch
+полного сообщения по cmid через messages.getByConversationMessageId.
+
+Файлы: VKApiClient.kt (parseMessage), ChatDetailScreen.kt (fetchMissingSenderProfiles).

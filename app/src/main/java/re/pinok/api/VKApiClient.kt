@@ -13708,14 +13708,35 @@ class VKApiClient(
         )
     }
 
-    /** #67: парсинг Message из JSON (для reply_message, fwd_messages). */
+    /** #67: парсинг Message из JSON (для reply_message, fwd_messages).
+     *  #REPLY-EMPTY-FIX (2026-11-24): Fenrir-паритет — fallback user_id→from_id,
+     *  body→text (VK API возвращает reply_message с legacy-ключами в некоторых
+     *  сценариях). + диагностический лог сырого reply_message. */
     private fun parseMessage(o: JsonObject): Message {
+        // #REPLY-EMPTY-DIAG: логируем ключевые поля reply_message/fwd,
+        // чтобы диагностировать «Пустое сообщение» в UI.
+        if (o.has("reply_message") || o.has("fwd_messages") || o.has("conversation_message_id")) {
+            val textEl = o.get("text")
+            val bodyEl = o.get("body")
+            val attArr = o.getAsJsonArray("attachments")
+            val textVal = textEl?.takeIf { !it.isJsonNull }?.asString ?: bodyEl?.takeIf { !it.isJsonNull }?.asString ?: ""
+            AppLog.d("VKApiClient", "#REPLY-EMPTY-DIAG parseMessage: id=${o.get("id")} " +
+                "from_id=${o.get("from_id")} user_id=${o.get("user_id")} " +
+                "textLen=${textVal.length} hasBody=${o.has("body")} " +
+                "atts=${attArr?.size() ?: -1} keys=${o.keySet().take(12)}")
+        }
         return Message(
             id = o.get("id")?.asLong ?: 0L,
             peerId = o.get("peer_id")?.asLong ?: 0L,
-            fromId = o.get("from_id")?.asLong ?: 0L,
+            // #REPLY-EMPTY-FIX: fallback user_id→from_id (Fenrir-паритет).
+            fromId = o.get("from_id")?.asLong
+                ?: o.get("user_id")?.asLong
+                ?: 0L,
             date = o.get("date")?.asLong ?: 0L,
-            text = o.get("text")?.takeIf { !it.isJsonNull }?.asString ?: "",
+            // #REPLY-EMPTY-FIX: fallback body→text (Fenrir-паритет).
+            text = o.get("text")?.takeIf { !it.isJsonNull }?.asString
+                ?: o.get("body")?.takeIf { !it.isJsonNull }?.asString
+                ?: "",
             out = o.get("out")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
             readState = o.get("read_state")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
             deleted = o.get("deleted")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
