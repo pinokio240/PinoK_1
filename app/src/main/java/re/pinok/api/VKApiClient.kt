@@ -1498,8 +1498,10 @@ class VKApiClient(
                 )
             }
             // MessageMods: undelete/unedit применяются к результату API-вызова.
+            // #REPLY-EMPTY-FIX: enrich reply_message стабов полным содержимым.
+            val enriched = enrichReplyStubs(peerId, raw)
             val snap = prefs.data.first()
-            val modified = messageMods.apply(raw, snap)
+            val modified = messageMods.apply(enriched, snap)
             modified
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "messagesGetHistory parse error", e)
@@ -1675,8 +1677,13 @@ class VKApiClient(
                     failure = "Ошибка разбора ${items.size()} сообщений (пропущено $skippedItems) — детали: Настройки → Логи, категория «Сеть и API»",
                 )
             }
+            // #REPLY-EMPTY-FIX (2026-11-24): VK API возвращает reply_message как
+            // МИНИМАЛЬНЫЙ стаб (is_unavailable=true, from_id=0, text="", atts=[]).
+            // Собираем cmid всех стаб-ответов и добираем полное содержимое через
+            // messages.getByConversationMessageId. Заменяем стабы на полные сообщения.
+            val enriched = enrichReplyStubs(peerId, raw)
             val snap = prefs.data.first()
-            val modified = messageMods.apply(raw, snap)
+            val modified = messageMods.apply(enriched, snap)
             HistoryResult(modified, profiles)
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "messagesGetHistoryWithProfiles error", e)
@@ -8478,6 +8485,59 @@ class VKApiClient(
     }
 
     /**
+     * #REPLY-EMPTY-FIX (2026-11-24): messages.getByConversationMessageId —
+     * запрашивает ПОЛНОЕ содержимое сообщений по их conversation_message_id.
+     *
+     * VK API messages.getHistory возвращает reply_message как МИНИМАЛЬНЫЙ стаб
+     * (is_unavailable=true, from_id=0, text="", attachments=[]) — НЕ встраивая
+     * полное содержимое ответа. Клиент должен добрать его через этот метод.
+     *
+     * @param peerId ID диалога.
+     * @param cmids список conversation_message_id для догрузки.
+     * @return Map<cmid, Message> — полное содержимое запрошенных сообщений.
+     *   Сообщения, которые не удалось получить (удалены/нет доступа), в map НЕТ.
+     */
+    suspend fun messagesGetByConversationMessageId(
+        peerId: Long,
+        cmids: List<Long>,
+    ): Map<Long, Message> {
+        if (cmids.isEmpty()) return emptyMap()
+        if (isOffline()) return emptyMap()
+        val args = mutableMapOf(
+            "peer_id" to peerId.toString(),
+            "conversation_message_ids" to cmids.joinToString(","),
+            "extended" to "1",
+            "fields" to "photo_100,photo_200,online,first_name,last_name,name,last_seen,online_app,online_info",
+        )
+        // forceWebGateway=true — web-токен (vk1.a.*) для reliable доступа.
+        val json = call("messages.getByConversationMessageId", args, forceWebGateway = true)
+            ?: return emptyMap()
+        return try {
+            val resp = json.getAsJsonObject("response") ?: return emptyMap()
+            val items = resp.getAsJsonArray("items") ?: return emptyMap()
+            val result = mutableMapOf<Long, Message>()
+            items.forEach { el ->
+                if (!el.isJsonObject) return@forEach
+                val o = el.asJsonObject
+                try {
+                    val msg = parseMessage(o)
+                    val cmid = o.get("conversation_message_id")?.takeIf { !it.isJsonNull }?.asLong
+                    if (cmid != null && cmid != 0L) {
+                        result[cmid] = msg
+                    }
+                } catch (e: Exception) {
+                    AppLog.w("VKApiClient", "getByConversationMessageId: parse failed for cmid=${o.get("conversation_message_id")}: ${e.message}")
+                }
+            }
+            AppLog.d("VKApiClient", "#REPLY-EMPTY-FIX getByCmid: requested=${cmids.size} got=${result.size}")
+            result
+        } catch (e: Exception) {
+            AppLog.w("VKApiClient", "messagesGetByConversationMessageId error: ${e.message}")
+            emptyMap()
+        }
+    }
+
+    /**
      * P0.25e #VOICE-ASR-REQUEST (2026-10): messages.recogniseAudioMessage —
      * ЗАПРАШИВАЕТ расшифровку ASR на сервере VK.
      *
@@ -13706,6 +13766,94 @@ class VKApiClient(
             userReaction = null,
             items = items,
         )
+    }
+
+    /**
+     * #REPLY-EMPTY-FIX (2026-11-24): enrich reply_message стабов полным содержимым.
+     *
+     * VK API messages.getHistory возвращает reply_message как МИНИМАЛЬНЫЙ стаб:
+     *   {id, conversation_message_id, date, from_id:0, text:"", attachments:[],
+     *    is_unavailable:true}
+     * Полное содержимое (текст, вложения, from_id) НЕ встраивается — клиент должен
+     * добрать его через messages.getByConversationMessageId.
+     *
+     * Метод:
+     *   1. Сканирует messages на reply_message-стабы (fromId==0 && text.isBlank &&
+     *      attachments пустые && conversationMessageId != null).
+     *   2. Собирает их cmid (conversation_message_id).
+     *   3. Batch-fetch через messagesGetByConversationMessageId(peerId, cmids).
+     *   4. Заменяет стабы на полные Message (через .copy(replyMessage = full)).
+     *
+     * Также обрабатывает вложенные fwd_messages (рекурсивно — fwd внутри fwd).
+     *
+     * @return новый список сообщений с обогащёнными replyMessage.
+     */
+    private suspend fun enrichReplyStubs(
+        peerId: Long,
+        messages: List<Message>,
+    ): List<Message> {
+        // 1. Собираем cmid всех reply-стабов (TOP-уровень + fwd).
+        val stubCmids = mutableSetOf<Long>()
+        fun collectStubs(msgs: List<Message>) {
+            for (m in msgs) {
+                val rm = m.replyMessage
+                if (rm != null && rm.conversationMessageId != null && isReplyStub(rm)) {
+                    stubCmids.add(rm.conversationMessageId!!)
+                }
+                m.fwdMessages?.forEach { fwd ->
+                    val frm = fwd.replyMessage
+                    if (frm != null && frm.conversationMessageId != null && isReplyStub(frm)) {
+                        stubCmids.add(frm.conversationMessageId!!)
+                    }
+                }
+            }
+        }
+        collectStubs(messages)
+        if (stubCmids.isEmpty()) return messages
+
+        AppLog.d("VKApiClient", "#REPLY-EMPTY-FIX enrichReplyStubs: ${stubCmids.size} stubs to fetch (peerId=$peerId)")
+
+        // 2. Batch-fetch полное содержимое.
+        val fullMessages = messagesGetByConversationMessageId(peerId, stubCmids.toList())
+        if (fullMessages.isEmpty()) {
+            AppLog.w("VKApiClient", "#REPLY-EMPTY-FIX enrichReplyStubs: getByCmid returned empty for ${stubCmids.size} cmids")
+            return messages
+        }
+
+        // 3. Заменяем стабы на полные сообщения.
+        fun replaceStub(rm: Message): Message {
+            val cmid = rm.conversationMessageId ?: return rm
+            val full = fullMessages[cmid] ?: return rm
+            return full
+        }
+        return messages.map { m ->
+            val topReply = m.replyMessage
+            val newTopReply = if (topReply != null && isReplyStub(topReply) && topReply.conversationMessageId != null) {
+                replaceStub(topReply)
+            } else topReply
+
+            val newFwd = m.fwdMessages?.map { fwd ->
+                val fwdReply = fwd.replyMessage
+                val newFwdReply = if (fwdReply != null && isReplyStub(fwdReply) && fwdReply.conversationMessageId != null) {
+                    replaceStub(fwdReply)
+                } else fwdReply
+                if (newFwdReply !== fwdReply) fwd.copy(replyMessage = newFwdReply) else fwd
+            }
+
+            if (newTopReply !== topReply) {
+                m.copy(replyMessage = newTopReply, fwdMessages = newFwd)
+            } else if (newFwd != null && newFwd !== m.fwdMessages) {
+                m.copy(fwdMessages = newFwd)
+            } else m
+        }
+    }
+
+    /** #REPLY-EMPTY-FIX: детект стаба reply_message (VK is_unavailable=true). */
+    private fun isReplyStub(m: Message): Boolean {
+        // Стаб: fromId==0 (VK не отдал автора), text пустой, attachments пустые.
+        // Дополнительно: conversationMessageId должен быть (иначе нечего догружать).
+        val attsEmpty = m.attachments == null || m.attachments.isEmpty()
+        return m.fromId == 0L && m.text.isBlank() && attsEmpty
     }
 
     /** #67: парсинг Message из JSON (для reply_message, fwd_messages).

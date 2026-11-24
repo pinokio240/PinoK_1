@@ -25106,3 +25106,26 @@ reply_message. Если text/atts действительно пустые — н
 полного сообщения по cmid через messages.getByConversationMessageId.
 
 Файлы: VKApiClient.kt (parseMessage), ChatDetailScreen.kt (fetchMissingSenderProfiles).
+
+## #REPLY-EMPTY-FIX enrich (2026-11-24)
+
+**Корень подтверждён логом**: VK API messages.getHistory возвращает reply_message
+как МИНИМАЛЬНЫЙ стаб (is_unavailable=true, from_id=0, text="", attachments=[]).
+VK НЕ встраивает полное содержимое — клиент должен добрать через
+messages.getByConversationMessageId.
+
+Лог #REPLY-EMPTY-DIAG (все reply_message):
+  from_id=0 user_id=null textLen=0 hasBody=false atts=0
+  keys=[attachments, conversation_message_id, date, from_id, id,
+        is_unavailable, text]
+
+**Фикс**:
+1. messagesGetByConversationMessageId(peerId, cmids) — batch-fetch полного
+   содержимого по cmid (forceWebGateway=true, extended=1).
+2. enrichReplyStubs(peerId, messages) — сканирует parsed messages на stub-ответы
+   (fromId==0 && text.isBlank && atts пустые), batch-fetch, заменяет стабы на
+   полные Message. Обрабатывает top-level reply и fwd.reply_message.
+3. isReplyStub(m) — детект стаба.
+4. Интегрировано в messagesGetHistory И messagesGetHistoryWithProfiles.
+
+Файл: VKApiClient.kt.
