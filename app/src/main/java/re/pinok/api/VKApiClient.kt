@@ -13852,7 +13852,10 @@ class VKApiClient(
     private fun isReplyStub(m: Message): Boolean {
         // Стаб: fromId==0 (VK не отдал автора), text пустой, attachments пустые.
         // Дополнительно: conversationMessageId должен быть (иначе нечего догружать).
-        val attsEmpty = m.attachments == null || m.attachments.isEmpty()
+        // Smart-cast fix: attachments — cross-module property (:core:data) →
+        // захват в локальный val (как lastSeen в enrichProfilesWithPlatform).
+        val atts = m.attachments
+        val attsEmpty = atts == null || atts.isEmpty()
         return m.fromId == 0L && m.text.isBlank() && attsEmpty
     }
 
