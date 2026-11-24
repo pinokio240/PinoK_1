@@ -25032,3 +25032,32 @@ CommunityAdminScreens, ClipsFeedScreen (v5-sweep).
 - ChatDetailScreen WallPostCard: автор = канал/группа (String).
 
 Проверки: check-nested-comments OK; brace delta (0,0) по 8 файлам.
+
+## 2026-11-23 — Отправитель в чатах, пустой reply, ответы в комментариях видео
+
+## Проблемы (жалоба пользователя)
+1. В групповых чатах/личках не видно, от кого сообщение (имя/аватар отправителя).
+2. В чатах плашка ответа (reply) совсем пустая.
+3. В комментариях к видео ответы на комментарии не разворачиваются.
+
+## Диагностика
+- #SENDER-PROFILES: loadOlder() и long-poll re-fetch использовали messagesGetHistory()
+  БЕЗ profiles → chatProfiles не пополнялся → у старых сообщений нет имени/аватара
+  отправителя; у плашки ответа replyAuthorName=null и replyPreviewText=«Пустое сообщение».
+- #VIDEO-REPLIES: в VideoCommentsSheet кнопка ответов зависела от comment.thread;
+  VK video.getComments может не отдавать thread у части комментариев → кнопки нет,
+  ответы не развернуть. Плюс догрузка шла только при previewCount < totalCount.
+
+## Исправления
+- ChatDetailScreen.kt loadOlder(): channelsGetHistory/messagesGetHistory → возвращают
+  profiles, сливаются в chatProfiles (enrichProfilesWithPlatform).
+- ChatDetailScreen.kt long-poll re-fetch: то же самое (WithProfiles + merge).
+- PostDetailScreen.kt CommentItem: новый параметр alwaysShowThreadToggle (default false);
+  при нём кнопка «Показать ответы» видна даже при threadCount==0; при пустой догрузке —
+  «Нет ответов».
+- VideoPlayerScreen.kt VideoCommentsSheet: alwaysShowThreadToggle=true; догрузка ответов
+  теперь и при previewCount==0 (thread отсутствует).
+
+## Проверка
+- Сборка не запускалась (пользователь собирает сам).
+- Бэкап: backups/2026-11-23_chat-video-fixes/

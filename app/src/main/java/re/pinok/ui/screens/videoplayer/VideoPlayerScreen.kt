@@ -4345,6 +4345,10 @@ private fun VideoCommentsSheet(
                                 isExpanded = comment.id in expandedReplies,
                                 isLoadingReplies = loadingThreadFor == comment.id,
                                 extraReplies = threadReplies[comment.id] ?: emptyList(),
+                                // #VIDEO-REPLIES (2026-11-23): показывать кнопку «ответы»
+                                // всегда — видео VK может не отдавать thread у части
+                                // комментариев (тогда threadCount==0), но ответы есть.
+                                alwaysShowThreadToggle = true,
                                 onExpandThread = {
                                     if (comment.id in expandedReplies) {
                                         expandedReplies = expandedReplies - comment.id
@@ -4352,7 +4356,12 @@ private fun VideoCommentsSheet(
                                         expandedReplies = expandedReplies + comment.id
                                         val previewCount = comment.thread?.items?.size ?: 0
                                         val totalCount = comment.thread?.count ?: 0
-                                        if (previewCount < totalCount) {
+                                        // #VIDEO-REPLIES (2026-11-23): догружаем ответы
+                                        // не только когда preview < total, но и когда
+                                        // thread отсутствует вовсе (previewCount==0) —
+                                        // иначе с alwaysShowThreadToggle кнопка есть,
+                                        // но данные не приходят.
+                                        if (previewCount < totalCount || (threadReplies[comment.id].isNullOrEmpty() && previewCount == 0)) {
                                             loadingThreadFor = comment.id
                                             scope.launch {
                                                 try {

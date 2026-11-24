@@ -3597,6 +3597,13 @@ fun ChatDetailScreen(
             val firstIdx = listState.firstVisibleItemIndex
             val firstOffset = listState.firstVisibleItemScrollOffset
             try {
+                // #SENDER-PROFILES (2026-11-23): раньше loadOlder() тянул историю
+                // через messagesGetHistory() БЕЗ профилей → chatProfiles не пополнялся
+                // → у старых сообщений (прокрутка вверх) не было имени/аватара
+                // отправителя, а плашка ответа (replyMessage) оставалась пустой
+                // (replyAuthorName = null, replyPreviewText = «Пустое сообщение»).
+                // Теперь оба пути возвращают profiles, и мы сливаем их в chatProfiles.
+                var olderProfiles: Map<Long, UserProfile> = emptyMap()
                 val older: List<Message> = if (channelHistoryMode) {
                     // Task 67 #CHANNELS-HIST: старая страница канала —
                     // channels.getHistory со start_cmid = минимальный cmid текущей
@@ -3607,17 +3614,24 @@ fun ChatDetailScreen(
                     // #CHANNEL-FILTERS (Task #CHANNELS-UI): пагинация «старее»
                     // сохраняет активный фильтр ленты (иначе подмешались бы
                     // посты других типов). null = «Всё».
-                    app.apiClient.channelsGetHistory(
+                    val ch = app.apiClient.channelsGetHistory(
                         peerId,
                         count = pageSize,
                         startCmid = oldest,
                         filter = channelFeedFilter,
-                    ).messages
+                    )
+                    olderProfiles = ch.profiles
+                    ch.messages
                 } else {
-                    app.apiClient.messagesGetHistory(
+                    val r = app.apiClient.messagesGetHistoryWithProfiles(
                         peerId, count = pageSize, offset = messages.size,
                     )
+                    olderProfiles = r.profiles
+                    r.messages
                 }.filter { np -> messages.none { it.id == np.id } }
+                if (olderProfiles.isNotEmpty()) {
+                    chatProfiles = enrichProfilesWithPlatform(app.apiClient, chatProfiles + olderProfiles)
+                }
                 if (older.isEmpty()) {
                     endReached = true
                 } else {
@@ -3847,10 +3861,17 @@ fun ChatDetailScreen(
             scope.launch {
                 try {
                     val targetCount = maxOf(messages.size, pageSize)
-                    val fresh = app.apiClient.messagesGetHistory(peerId, count = targetCount)
-                        .distinctBy { it.id }
+                    // #SENDER-PROFILES (2026-11-23): раньше re-fetch после LongPoll шёл
+                    // messagesGetHistory() БЕЗ профилей — профили новых авторов (новые
+                    // участники беседы) не появлялись до перезахода в чат. Теперь
+                    // берём WithProfiles и сливаем.
+                    val freshResult = app.apiClient.messagesGetHistoryWithProfiles(peerId, count = targetCount)
+                    val fresh = freshResult.messages.distinctBy { it.id }
                     if (fresh.isNotEmpty()) {
                         messages = fresh
+                        if (freshResult.profiles.isNotEmpty()) {
+                            chatProfiles = enrichProfilesWithPlatform(app.apiClient, chatProfiles + freshResult.profiles)
+                        }
                         errorText = null
                         if (isPinnedToNewest) {
                             listState.animateScrollToItem(0)

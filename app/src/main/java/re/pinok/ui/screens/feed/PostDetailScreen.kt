@@ -1619,6 +1619,11 @@ internal fun CommentItem(
     // FIX-B: клик по имени автора комментария → навигация на профиль (UserProfile).
     // Аудит: имя автора было plain Text без .clickable — теперь TextButton.
     onUserClick: (Long) -> Unit = {},
+    // #VIDEO-REPLIES (2026-11-23): принудительно показывать переключатель «ответы»
+    // даже если VK не вернул comment.thread (video.getComments может не отдавать
+    // thread у части комментариев). Известный count при этом может быть 0 —
+    // колбэк onExpandThread сам догрузит ответы через getComments(comment_id).
+    alwaysShowThreadToggle: Boolean = false,
 ) {
     val author = profiles[comment.fromId]
     val authorName = author?.fullName ?: "Неизвестный"
@@ -1999,12 +2004,19 @@ internal fun CommentItem(
             // VK возвращает thread.count + thread.items (превью до 10 ответов).
             // По тапу разворачиваем ветку: показываем thread.items + догружаем
             // остальные через wall.getComments(comment_id=...), если preview < count.
-            if (threadCount > 0) {
+            // #VIDEO-REPLIES (2026-11-23): alwaysShowThreadToggle — показывать кнопку
+            // даже при threadCount==0 (VK video.getComments может не отдавать thread).
+            if (threadCount > 0 || alwaysShowThreadToggle) {
                 val word = when {
                     threadCount % 100 in 11..14 -> "ответов"
                     threadCount % 10 == 1 -> "ответ"
                     threadCount % 10 in 2..4 -> "ответа"
                     else -> "ответов"
+                }
+                val toggleText = when {
+                    isExpanded -> "↑ свернуть"
+                    threadCount > 0 -> "↓ $threadCount $word"
+                    else -> "Показать ответы"
                 }
                 Row(
                     modifier = Modifier
@@ -2023,7 +2035,7 @@ internal fun CommentItem(
                         Spacer(Modifier.width(4.dp))
                     }
                     Text(
-                        text = if (isExpanded) "↑ свернуть" else "↓ $threadCount $word",
+                        text = toggleText,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Medium,
@@ -2034,7 +2046,7 @@ internal fun CommentItem(
             // §37.12 #328: развёрнутая ветка ответов.
             // Сначала рендерим preview из comment.thread.items (до 10, уже в памяти),
             // затем extraReplies — догруженные через wall.getComments(comment_id).
-            if (isExpanded && threadCount > 0) {
+            if (isExpanded && (threadCount > 0 || alwaysShowThreadToggle)) {
                 val previewReplies = comment.thread?.items ?: emptyList()
                 val allReplies = previewReplies + extraReplies
                 // Дедупликация по id (preview и extra могут пересекаться).
@@ -2066,6 +2078,15 @@ internal fun CommentItem(
                     if (isLoadingReplies) {
                         Text(
                             text = "Загрузка ответов…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 28.dp, top = 4.dp),
+                        )
+                    } else if (dedupReplies.isEmpty() && alwaysShowThreadToggle) {
+                        // #VIDEO-REPLIES (2026-11-23): VK не отдал thread и догрузка
+                        // вернула пусто — не оставляем развёрнутую ветку пустой.
+                        Text(
+                            text = "Нет ответов",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(start = 28.dp, top = 4.dp),
