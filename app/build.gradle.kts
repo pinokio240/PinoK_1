@@ -40,9 +40,14 @@ android {
         // комментариев (CancellationException при закрытии плеера).
         // #RELEASE-V232-BUMP (2026-11-19): bump 231→232 — платные видео/посты (donut),
         // пропадающие карточки с видео в группах (owners.getMainTab), улучшения PiP.
-        versionCode = 232
-        versionName = "2.3.2"
-        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-11-19T12:00:00+03:00\"")
+        // #RELEASE-V233-BUMP (2026-11-25): bump 232→233 — устранение регрессов:
+        // имя отправителя в чатах (профили при подгрузке старых сообщений/LongPoll),
+        // пустая плашка ответа (VK отдаёт reply_message стабом — добираем через
+        // getByConversationMessageId, Fenrir-паритет парсера), невидимый текст плашки
+        // на светлом акценте, разворачивание ответов в комментариях видео.
+        versionCode = 233
+        versionName = "2.3.3"
+        buildConfigField("String", "BUILD_TIMESTAMP", "\"2026-11-25T12:00:00+03:00\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
