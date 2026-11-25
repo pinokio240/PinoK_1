@@ -618,7 +618,10 @@ private fun buildChatListItems(
         result.add(ChatListItem.MessageRow(msg, isGrouped))
 
         // P1.1: UnreadDivider — после последнего непрочитанного.
-        if (unreadDividerEnabled && i == lastUnreadIdx && i < messages.lastIndex) {
+        // #UNREAD-BAR (2026-11-24): убрано условие i < messages.lastIndex —
+        // теперь divider показывается ВСЕГДА после последнего непрочитанного,
+        // даже если это последнее сообщение в списке.
+        if (unreadDividerEnabled && i == lastUnreadIdx) {
             result.add(ChatListItem.UnreadDivider)
         }
 
@@ -5283,15 +5286,16 @@ fun ChatDetailScreen(
                 ) {
                     derivedStateOf {
                         // #CHANNEL-POST-CARD: в канальном history-режиме лента — это
-                        // посты-карточки, а не чат, поэтому дата-разделители и
-                        // unread-divider не показываем (обычные чаты не затрагиваются:
-                        // channelHistoryMode=false у них).
+                        // посты-карточки, а не чат, поэтому дата-разделители не показываем.
+                        // #UNREAD-BAR (2026-11-24): unread-divider теперь показываем
+                        // и в каналах — пользователь хочет видеть границу прочитанных/
+                        // непрочитанных постов.
                         val chan = channelHistoryMode
                         buildChatListItems(
                             messages = messages,
                             groupingEnabled = groupingEnabled,
                             dateSeparatorsEnabled = dateSeparatorsEnabled && !chan,
-                            unreadDividerEnabled = unreadDividerEnabled && !chan,
+                            unreadDividerEnabled = unreadDividerEnabled,
                         )
                     }
                 }
@@ -5308,6 +5312,34 @@ fun ChatDetailScreen(
                 val unreadCount by remember(messages) {
                     derivedStateOf {
                         messages.count { !it.isOut && it.readState == 0 }
+                    }
+                }
+                // #UNREAD-BAR (2026-11-24): «блуждающий колонтитул» — плавающая
+                // полоска «↓ Непрочитанные (N)» над полем ввода. Появляется когда:
+                //   1. unreadCount > 0 (есть непрочитанные входящие)
+                //   2. firstUnreadChatListItemIndex >= 0 (индекс найден в chatListItems)
+                //   3. пользователь НЕ внизу (firstVisibleItemIndex > 0 ИЛИ offset > 100)
+                // Клик → animateScrollToItem(firstUnreadIdx) — скролл к первому непрочитанному.
+                // Исчезает: markAsRead → readState→1 → unreadCount=0 ИЛИ пользователь внизу.
+                val firstUnreadMsgIdx by remember(messages) {
+                    derivedStateOf {
+                        // messages в DESC порядке (index 0 = newest). Ищем СТАРЕЙШИЙ
+                        // непрочитанный = HIGHEST index с readState==0 — это граница
+                        // между прочитанными (старее) и непрочитанными (новее).
+                        var idx = -1
+                        for (i in messages.indices) {
+                            if (!messages[i].isOut && messages[i].readState == 0) {
+                                idx = i
+                            }
+                        }
+                        idx
+                    }
+                }
+                val showUnreadBar by remember {
+                    derivedStateOf {
+                        unreadCount > 0 && firstUnreadMsgIdx >= 0 &&
+                            (listState.firstVisibleItemIndex > 0 ||
+                                listState.firstVisibleItemScrollOffset > 100)
                     }
                 }
                 // #CHANNEL-MAP-C (2026-10-12): загрузка закреплённых постов канала
@@ -5359,31 +5391,36 @@ fun ChatDetailScreen(
                                 }
                             }
                             ChatListItem.UnreadDivider -> {
-                                Row(
+                                // #UNREAD-BAR (2026-11-24): более заметный divider —
+                                // акцентный pill с «Непрочитанные сообщения» вместо
+                                // тонких линий. Виден на всех темах.
+                                Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
+                                        .padding(vertical = 6.dp),
+                                    contentAlignment = Alignment.Center,
                                 ) {
-                                    Box(
+                                    Row(
                                         modifier = Modifier
-                                            .weight(1f)
-                                            .height(1.dp)
-                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
-                                    )
-                                    Text(
-                                        text = "Непрочитанные",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.padding(horizontal = 8.dp),
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(1.dp)
-                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
-                                    )
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                                            .padding(horizontal = 14.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.primary)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = "Непрочитанные сообщения",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
                                 }
                             }
                             is ChatListItem.MessageRow -> {
@@ -5785,6 +5822,41 @@ fun ChatDetailScreen(
                         ) {
                             Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "К новым сообщениям")
                         }
+                    }
+                }
+                // #UNREAD-BAR (2026-11-24): «блуждающий колонтитул» — плавающая
+                // полоска «↓ Непрочитанные (N)» по центру-низу, над полем ввода.
+                // Появляется когда есть непрочитанные И пользователь НЕ внизу чата.
+                // Клик → скролл к первому (старейшему) непрочитанному сообщению.
+                // Исчезает после markAsRead (readState→1 → unreadCount=0).
+                if (showUnreadBar) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 16.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(MaterialTheme.colorScheme.primary)
+                            .clickable {
+                                if (firstUnreadMsgIdx >= 0) {
+                                    scope.launch { listState.animateScrollToItem(firstUnreadMsgIdx) }
+                                }
+                            }
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Непрочитанные ($unreadCount)",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
                     }
                 }
             }
