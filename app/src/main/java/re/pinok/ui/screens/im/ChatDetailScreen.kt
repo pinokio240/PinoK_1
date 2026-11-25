@@ -3008,17 +3008,14 @@ fun ChatDetailScreen(
                     // сам перезапросит свежий url и повторит. Фото — photos-сервер
                     // на каждое (rate-limit митигируется 300ms-паузами), видео —
                     // отдельным сообщением, как и раньше.
+                    // #VIDEO-CAPTION-FIX (2026-11-24): videoSent объявлен ВНЕ блока
+                    // if (!authFailed) — используется ниже после блока (если только
+                    // видео + caption → отправить текст отдельным messagesSend).
+                    var videoSent = false
                     if (!authFailed) {
                         val sharedDocUrl = if (pfiles.any { !it.isImage && !it.isVideo }) {
                             app.apiClient.docsGetMessagesUploadServer(type = "doc")
                         } else null
-                        // #VIDEO-CAPTION-FIX (2026-11-24): видео отправляется отдельным
-                        // сообщением (uploadAndSendVideoUri). Раньше если ТОЛЬКО видео +
-                        // текст — attachments оставался пустым → sendWithAttachment НЕ
-                        // вызывался → текст-подпись терялся. Теперь: трекаем videoSent,
-                        // и если caption не пустой + нет других attachments — отправляем
-                        // текст отдельным messagesSend.
-                        var videoSent = false
                         for (pf in pfiles) {
                             // Fix #297: помечаем файл как «загружается».
                             val att = if (pf.isImage) {
