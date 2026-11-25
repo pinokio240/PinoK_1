@@ -5,7 +5,7 @@
       "versionName": "2.3.3",
       "stamp": "calls-2026.11.25-2.3.3",
       "apkUrl": "https://github.com/pinokio240/PinoK_1/releases/download/v2.3.3/Pinok_2_3_3.apk",
-      "sha256": "7d288eea7773b4660136eeb409286de59d6cf76b3fa1bd1ec42aec69bca1ce83",
+      "sha256": "6cbfdda0baebddf9cf85fe7b18c546510aad11c7d918fe7cee23552f2ce45f9a",
       "notes": "Устранение регрессов:\n1. Имя отправителя в чатах — профили подгружаются при прокрутке старых сообщений и после LongPoll (было пусто у старых/новых авторов).\n2. Пустая плашка ответа — VK отдаёт reply_message стабом, контент добирается через messages.getByConversationMessageId + Fenrir-паритет парсера.\n3. Невидимый текст плашки ответа на светлом акценте (textColor luminance по эффективному bubbleColor).\n4. Ответы на комментарии видео — кнопка видна и разворачивается даже когда VK не отдал thread preview."
     },
     {
