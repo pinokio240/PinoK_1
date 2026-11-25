@@ -5505,16 +5505,39 @@ fun ChatDetailScreen(
                                     // P0.25 #VOICE-ASR-FETCH: передаём callback для запроса transcript.
                                     onFetchVoiceTranscripts = { scope.launch { fetchVoiceTranscripts() } },
                                     // P0.25e #VOICE-ASR-REQUEST: callback для messages.recogniseAudioMessage.
-                                    // ChatDetailScreen scope имеет доступ к app + scope + fetchVoiceTranscripts.
+                                    // #ASR-POLL-FIX (2026-11-24): раньше после recogniseAudioMessage ждали
+                                    // 5 сек и делали ОДИН fetchVoiceTranscripts. VK готовит ASR 5-30 сек →
+                                    // один fetch часто не находил готовый transcript → расшифровка не
+                                    // появлялась без перезахода в диалог. Теперь: poll каждые 5 сек,
+                                    // max 12 попыток (60 сек), с early-exit когда transcript готов.
                                     onRequestAsr = { pId, cId, amId ->
                                         scope.launch {
                                             try {
                                                 val ok = app.apiClient.messagesRecogniseAudioMessage(pId, cId, amId)
                                                 AppLog.i("VoiceASR", "recogniseAudioMessage result: $ok (peer=$pId cmid=$cId audioMsgId=$amId)")
                                                 if (ok) {
-                                                    // VK принял запрос — через 5-30 сек transcript появится.
-                                                    kotlinx.coroutines.delay(5000)
-                                                    fetchVoiceTranscripts()
+                                                    // VK принял запрос — ASR готовится 5-30 сек.
+                                                    // Poll: каждые 5 сек, max 12 попыток (60 сек).
+                                                    var attempts = 0
+                                                    while (attempts < 12) {
+                                                        kotlinx.coroutines.delay(5000)
+                                                        fetchVoiceTranscripts()
+                                                        attempts++
+                                                        // Early-exit: все voice-сообщения имеют done-transcript?
+                                                        val hasPending = messages.any { m ->
+                                                            m.attachments?.any { att ->
+                                                                val am = att.doc?.audioMsg ?: att.audioMessage
+                                                                am != null && am.transcriptState != "done"
+                                                            } == true
+                                                        }
+                                                        if (!hasPending) {
+                                                            AppLog.i("VoiceASR", "ASR poll done after $attempts attempts — all transcripts ready")
+                                                            break
+                                                        }
+                                                    }
+                                                    if (attempts >= 12) {
+                                                        AppLog.w("VoiceASR", "ASR poll exhausted 12 attempts (60s) — transcript may not be ready")
+                                                    }
                                                 }
                                             } catch (e: Exception) {
                                                 AppLog.e("VoiceASR", "recogniseAudioMessage crash: ${e.message}", e)

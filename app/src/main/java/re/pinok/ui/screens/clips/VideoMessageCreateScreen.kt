@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
@@ -337,6 +338,11 @@ private fun CameraRecorderStage(
     onCancel: () -> Unit,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    // #CLIP-CAM-SWITCH (2026-11-24): ранее камера была хардкод LENS_FACING_FRONT
+    // — нет кнопки переключения front/back. Добавляем state + rebind при смене.
+    var lensFacing by remember {
+        mutableStateOf(androidx.camera.core.CameraSelector.LENS_FACING_FRONT)
+    }
     val previewView = remember {
         PreviewView(context).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
@@ -349,7 +355,8 @@ private fun CameraRecorderStage(
     }
     val videoCapture = remember { VideoCapture.withOutput(recorder) }
 
-    LaunchedEffect(permissionGranted) {
+    // Rebind камеры при: получении разрешения ИЛИ смене lensFacing.
+    LaunchedEffect(permissionGranted, lensFacing) {
         if (!permissionGranted) return@LaunchedEffect
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
@@ -361,12 +368,13 @@ private fun CameraRecorderStage(
                 provider.unbindAll()
                 provider.bindToLifecycle(
                     lifecycleOwner,
-                    CameraSelectorBuilderFront(),
+                    androidx.camera.core.CameraSelector.Builder()
+                        .requireLensFacing(lensFacing).build(),
                     preview,
                     videoCapture,
                 )
             } catch (e: Exception) {
-                AppLog.e(TAG, "bind error", e)
+                AppLog.e(TAG, "bind error (lensFacing=$lensFacing)", e)
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -424,7 +432,9 @@ private fun CameraRecorderStage(
             ShapeOutlineOverlay(shapeId = VideoMessageShapes.SHAPE_ID_BASE, enabled = !isRecording)
         }
 
-        // Верхняя панель: «Отмена».
+        // Верхняя панель: «Отмена» (слева) + «Сменить камеру» (справа).
+        // #CLIP-CAM-SWITCH: кнопка переключения front/back камеры (как в ClipCreateScreen).
+        // Скрыта во время записи — смена камеры mid-recording ломает VideoCapture.
         Row(
             Modifier
                 .fillMaxWidth()
@@ -437,6 +447,20 @@ private fun CameraRecorderStage(
                 modifier = Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.4f)),
             ) {
                 Icon(Icons.Filled.Close, contentDescription = "Отмена", tint = Color.White)
+            }
+            if (!isRecording) {
+                IconButton(
+                    onClick = {
+                        lensFacing = if (lensFacing == androidx.camera.core.CameraSelector.LENS_FACING_FRONT) {
+                            androidx.camera.core.CameraSelector.LENS_FACING_BACK
+                        } else {
+                            androidx.camera.core.CameraSelector.LENS_FACING_FRONT
+                        }
+                    },
+                    modifier = Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.4f)),
+                ) {
+                    Icon(Icons.Filled.Cameraswitch, contentDescription = "Сменить камеру", tint = Color.White)
+                }
             }
         }
 
@@ -488,10 +512,6 @@ private fun CameraRecorderStage(
         }
     }
 }
-
-private fun CameraSelectorBuilderFront() =
-    androidx.camera.core.CameraSelector.Builder()
-        .requireLensFacing(androidx.camera.core.CameraSelector.LENS_FACING_FRONT).build()
 
 /** Оверлей-контур выбранной формы поверх квадратного кадра (ориентир маски). */
 @Composable
