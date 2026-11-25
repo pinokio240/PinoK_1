@@ -12491,7 +12491,12 @@ class VKApiClient(
         return sendWithAttachment(peerId, attachment)
     }
 
-    /** Отправить сообщение с attachment (doc, photo, wall, etc.). */
+    /** Отправить сообщение с attachment (doc, photo, wall, etc.).
+     *  #ATTACH-SEND-WEB-GW (2026-11-24): forceWebGateway=true — web-токен (vk1.a.*)
+     *  требует web gateway для messages.send с attachment. Раньше classic gateway
+     *  возвращал ошибку → файл загружен (upload через web gateway), но messages.send
+     *  с attachment фейлился → UI показывал «не отправлено», файл не появлялся в чате.
+     *  При повторном нажатии → файл загружался заново (дубль). */
     suspend fun sendWithAttachment(peerId: Long, attachment: String, message: String = ""): Long {
         if (isOffline()) return -1L
         val args = mutableMapOf(
@@ -12500,13 +12505,19 @@ class VKApiClient(
             "random_id" to randomIdCounter.incrementAndGet().toString(),
         )
         if (message.isNotBlank()) args["message"] = message
-        val json = call("messages.send", args) ?: return -1L
+        val json = call("messages.send", args, forceWebGateway = true) ?: run {
+            AppLog.w("VKApiClient", "sendWithAttachment: call()=null err=${lastApiError} att=${attachment.take(60)} msgLen=${message.length}")
+            return -1L
+        }
         return try {
             json.getAsJsonObject("response")?.getAsJsonArray("items")
                 ?.firstOrNull()?.asJsonObject?.get("message_id")?.asLong
                 ?: json.getAsJsonObject("response")?.get("message_id")?.asLong
                 ?: -1L
-        } catch (_: Exception) { -1L }
+        } catch (e: Exception) {
+            AppLog.e("VKApiClient", "sendWithAttachment parse error: ${e.message}", e)
+            -1L
+        }
     }
 
     /**

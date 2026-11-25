@@ -3012,6 +3012,13 @@ fun ChatDetailScreen(
                         val sharedDocUrl = if (pfiles.any { !it.isImage && !it.isVideo }) {
                             app.apiClient.docsGetMessagesUploadServer(type = "doc")
                         } else null
+                        // #VIDEO-CAPTION-FIX (2026-11-24): видео отправляется отдельным
+                        // сообщением (uploadAndSendVideoUri). Раньше если ТОЛЬКО видео +
+                        // текст — attachments оставался пустым → sendWithAttachment НЕ
+                        // вызывался → текст-подпись терялся. Теперь: трекаем videoSent,
+                        // и если caption не пустой + нет других attachments — отправляем
+                        // текст отдельным messagesSend.
+                        var videoSent = false
                         for (pf in pfiles) {
                             // Fix #297: помечаем файл как «загружается».
                             val att = if (pf.isImage) {
@@ -3024,6 +3031,7 @@ fun ChatDetailScreen(
                                     sizeBytes = pf.sizeBytes,
                                 ) { _, _, _ -> }
                                 if (msgId > 0) {
+                                    videoSent = true
                                     AppLog.i("ChatDetailScreen", "video sent as separate message: ${pf.displayName} (msgId=$msgId)")
                                 }
                                 null // видео уже отправлено отдельным сообщением
@@ -3084,6 +3092,22 @@ fun ChatDetailScreen(
                             vkAttachments = vkAtts // MULTI-SELECT-ATTACH: restore VK-превью.
                             inputText = caption
                         }
+                    } else if (videoSent && caption.isNotBlank() && !authFailed) {
+                        // #VIDEO-CAPTION-FIX: видео отправлено отдельным сообщением,
+                        // других вложений нет, но есть текст-подпись — отправляем текст
+                        // отдельным messagesSend (как обычное текстовое сообщение).
+                        val textMsgId = app.apiClient.messagesSend(peerId, caption)
+                        AppLog.i("ChatDetailScreen", "#VIDEO-CAPTION-FIX: caption sent as separate text message (msgId=$textMsgId)")
+                        if (textMsgId > 0) {
+                            reloadMessages()
+                        } else {
+                            AppLog.w("ChatDetailScreen", "#VIDEO-CAPTION-FIX: caption send failed (msgId=$textMsgId)")
+                            inputText = caption
+                        }
+                    } else if (videoSent && !authFailed) {
+                        // Видео отправлено, текста нет — просто reload.
+                        AppLog.i("ChatDetailScreen", "video-only sent, no caption — reload")
+                        reloadMessages()
                     } else if (!authFailed) {
                         AppLog.w("ChatDetailScreen", "batch: no attachments uploaded")
                         errorText = "Не удалось загрузить вложения (VK отклонил)"
