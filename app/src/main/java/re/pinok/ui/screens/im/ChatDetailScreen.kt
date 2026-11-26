@@ -3461,13 +3461,22 @@ fun ChatDetailScreen(
             // Safety-net: клик по чату в MessagesScreen уже вызывает markAsRead,
             // но при открытии через deep-link (из уведомления) этого не происходит.
             // DNR (Do Not Read) мод проверяется внутри messagesMarkAsRead.
+            // #UNREAD-BAR-FIX (2026-11-24): задержка 2 сек если есть непрочитанные —
+            // раньше markAsRead вызывался мгновенно → LongPoll ReadInbox через
+            // 100-500мс → readState→1 → unreadCount=0 → колонтитул исчезал до
+            // того как пользователь его увидел. Теперь: 2 сек окно чтобы увидеть
+            // колонтитул и кликнуть «↓ Непрочитанные» для скролла к ним.
             if (messages.isNotEmpty()) {
                 val newestId = messages.maxOf { it.id }
+                val hasUnreadOnOpen = messages.any { !it.isOut && it.readState == 0 }
                 scope.launch {
                     try {
+                        if (hasUnreadOnOpen) {
+                            kotlinx.coroutines.delay(2000L)
+                        }
                         val ok = app.apiClient.messagesMarkAsRead(peerId, newestId)
                         AppLog.d("ChatDetailScreen",
-                            "markAsRead on open: peer=$peerId upTo=$newestId ok=$ok")
+                            "markAsRead on open: peer=$peerId upTo=$newestId ok=$ok hasUnread=$hasUnreadOnOpen")
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         // Fix #151: rememberCoroutineScope отменяется при уходе экрана /
                         // рекомпозиции — нормальный lifecycle, не ошибка. Раньше ловилось
@@ -5878,8 +5887,9 @@ fun ChatDetailScreen(
                 // #UNREAD-BAR (2026-11-24): «блуждающий колонтитул» — плавающая
                 // полоска «↓ Непрочитанные (N)» по центру-низу, над полем ввода.
                 // Появляется когда есть непрочитанные И пользователь НЕ внизу чата.
-                // Клик → скролл к первому (старейшему) непрочитанному сообщению.
-                // Исчезает после markAsRead (readState→1 → unreadCount=0).
+                // Клик → скролл к первому (старейшему) непрочитанному + markAsRead.
+                // #UNREAD-BAR-FIX: клик также вызывает markAsRead немедленно —
+                // не ждём 2-сек задержку on-open. Пользователь сам решил «прочитать».
                 if (showUnreadBar) {
                     Row(
                         modifier = Modifier
@@ -5889,7 +5899,20 @@ fun ChatDetailScreen(
                             .background(MaterialTheme.colorScheme.primary)
                             .clickable {
                                 if (firstUnreadMsgIdx >= 0) {
-                                    scope.launch { listState.animateScrollToItem(firstUnreadMsgIdx) }
+                                    scope.launch {
+                                        listState.animateScrollToItem(firstUnreadMsgIdx)
+                                        // #UNREAD-BAR-FIX: markAsRead после скролла —
+                                        // пользователь просмотрел непрочитанные.
+                                        val newestId = messages.maxOf { it.id }
+                                        try {
+                                            app.apiClient.messagesMarkAsRead(peerId, newestId)
+                                            AppLog.d("ChatDetailScreen",
+                                                "markAsRead on unread-bar click: peer=$peerId upTo=$newestId")
+                                        } catch (e: Exception) {
+                                            AppLog.w("ChatDetailScreen",
+                                                "markAsRead on bar click failed: ${e.message}")
+                                        }
+                                    }
                                 }
                             }
                             .padding(horizontal = 16.dp, vertical = 8.dp),
