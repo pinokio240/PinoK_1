@@ -563,6 +563,51 @@ msg.id > 0 && msg.id <= upToCmid
 }
 
 /**
+ * #READSTATE-MERGE (2026-11-24): preserve локально обновлённого readState при
+ * re-fetch. VK API messages.getHistory может вернуть STALE readState=0 для
+ * сообщений которые уже прочитаны (race: markAsRead ещё не обработан сервером
+ * → getHistory возвращает устаревший статус). Без merge — ✓✓ пропадают после
+ * отправки сообщения (LongPoll NewMessage → re-fetch → fresh.readState=0
+ * затирает локальный readState=1). После перезахода всё ок (сервер успевает).
+ *
+ * Правило: если old message имеет readState=1, сохраняем его в fresh (не даём
+ * серверу «непрочитать» уже прочитанное). Обратное (fresh=1, old=0) — НЕ
+ * сбрасываем (сервер узнал о прочтении раньше локального state — это нормально).
+ *
+ * Также сохраняем user_reaction (локально поставленная реакция может не успеть
+ * прийти в getHistory).
+ */
+private fun mergeReadState(old: List<Message>, fresh: List<Message>): List<Message> {
+    if (old.isEmpty()) return fresh
+    // Map: id → readState (только для прочитанных, чтобы быстро lookup).
+    val oldReadById = HashMap<Long, Int>(old.size)
+    val oldReactionById = HashMap<Long, MessageReaction?>(old.size)
+    for (m in old) {
+        if (m.readState == 1) {
+            oldReadById[m.id] = 1
+            val r = m.reactions
+            if (r != null && r.userReaction != null) {
+                oldReactionById[m.id] = r
+            }
+        }
+    }
+    if (oldReadById.isEmpty()) return fresh
+    return fresh.map { fm ->
+        if (fm.id > 0 && oldReadById[fm.id] == 1 && fm.readState == 0) {
+            // Сервер вернул stale readState=0, но локально уже readState=1.
+            // Сохраняем локальный статус прочтения.
+            val mergedReactions = if (fm.reactions?.userReaction == null) {
+                oldReactionById[fm.id]?.let { oldR ->
+                    // Локальная реакция есть, сервер не вернул → merge.
+                    fm.reactions?.copy(userReaction = oldR.userReaction) ?: oldR
+                }
+            } else fm.reactions
+            fm.copy(readState = 1, reactions = mergedReactions)
+        } else fm
+    }
+}
+
+/**
  * P1.1: ChatListItem — элемент ленты диалога: сообщение с pre-computed
  * isGrouped флагом, дата-сепаратор или разделитель непрочитанных.
  * (Восстановлен вместе с правкой #IM-REACTIONS-GRID — был случайно удалён.)
@@ -1296,7 +1341,9 @@ fun ChatDetailScreen(
                 val fresh = app.apiClient.messagesGetHistory(peerId, count = targetCount)
                     .distinctBy { it.id }
                 if (fresh.isNotEmpty()) {
-                    messages = fresh
+                    // #READSTATE-MERGE: preserve локального readState=1 — не даём
+                    // stale серверному ответу «непрочитать» уже прочитанные.
+                    messages = mergeReadState(messages, fresh)
                     errorText = null
                 }
             } catch (e: Exception) {
@@ -2597,7 +2644,8 @@ fun ChatDetailScreen(
                 val result = app.apiClient.messagesGetHistoryWithProfiles(peerId, count = pageSize)
                 val fresh = result.messages.distinctBy { it.id }
                 if (fresh.isNotEmpty() || result.failure == null) {
-                    messages = fresh
+                    // #READSTATE-MERGE: preserve readState при wall-fallback re-fetch.
+                    messages = mergeReadState(messages, fresh)
                     chatProfiles = enrichProfilesWithPlatform(app.apiClient, fetchMissingSenderProfiles(app.apiClient, result.messages, result.profiles))
                     if (fresh.size < pageSize) endReached = true
                     channelWallFallback = true
@@ -3907,7 +3955,10 @@ fun ChatDetailScreen(
                     val freshResult = app.apiClient.messagesGetHistoryWithProfiles(peerId, count = targetCount)
                     val fresh = freshResult.messages.distinctBy { it.id }
                     if (fresh.isNotEmpty()) {
-                        messages = fresh
+                        // #READSTATE-MERGE: preserve readState=1 из старого списка.
+                        // LongPoll NewMessage → re-fetch → fresh может вернуть stale
+                        // readState=0 для уже прочитанных → ✓✓ пропадали.
+                        messages = mergeReadState(messages, fresh)
                         if (freshResult.profiles.isNotEmpty()) {
                             chatProfiles = enrichProfilesWithPlatform(app.apiClient, chatProfiles + freshResult.profiles)
                         }
