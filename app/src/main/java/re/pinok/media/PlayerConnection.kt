@@ -1342,6 +1342,13 @@ object PlayerConnection {
     private fun publishStateImmediate() {
         val ctrl = controller ?: return
         val track = currentTrack ?: return
+        // #SPEED-PERSIST (2026-11-24): читаем speed из ExoPlayer's PlaybackParameters.
+        // Раньше publishStateImmediate НЕ включал speed → при reconnect контроллера
+        // (выход/вход в экран) стейт публиковался с дефолтным speed=1.0f, хотя
+        // ExoPlayer продолжал играть на 1.5x → UI показывал x1.
+        val currentSpeed = try {
+            ctrl.playbackParameters.speed
+        } catch (_: Exception) { 1.0f }
         _playerState.value = PlayerState(
             currentTrack = track,
             isPlaying = ctrl.isPlaying,
@@ -1351,6 +1358,7 @@ object PlayerConnection {
             currentIndex = ctrl.currentMediaItemIndex,
             shuffleModeEnabled = ctrl.shuffleModeEnabled,
             repeatMode = ctrl.repeatMode,
+            speed = currentSpeed,
         )
     }
 
@@ -1513,6 +1521,16 @@ object PlayerConnection {
     // ─── Controller listener ───────────────────────────────────────
 
     private class ControllerListener : Player.Listener {
+        // #SPEED-PERSIST (2026-11-24): отслеживаем изменение PlaybackParameters
+        // (speed/pitch) от ExoPlayer. Без этого UI не узнавал о смене скорости
+        // если она менялась не через setPlaybackSpeed (например, при restore
+        // после reconnect контроллера).
+        override fun onPlaybackParametersChanged(playbackParameters: androidx.media3.common.PlaybackParameters) {
+            val spd = playbackParameters.speed
+            _playerState.value = _playerState.value.copy(speed = spd)
+            AppLog.i(TAG, "onPlaybackParametersChanged → speed=$spd")
+        }
+
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _playerState.value = _playerState.value.copy(isPlaying = isPlaying)
             // Fix #170: используем isDownloaded() (O(1) StateFlow lookup) вместо

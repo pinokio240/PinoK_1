@@ -1976,7 +1976,7 @@ class VKApiClient(
     }
 
     /** messages.search — поиск по сообщениям. */
-    suspend fun messagesSearch(query: String, peerId: Long? = null, count: Int = 20): List<MessageSearchResult> {
+    suspend fun messagesSearch(query: String, peerId: Long? = null, count: Int = 50): List<MessageSearchResult> {
         if (isOffline() || query.isBlank()) return emptyList()
         val args = mutableMapOf(
             "q" to query.trim(),
@@ -1985,7 +1985,10 @@ class VKApiClient(
             "fields" to "photo_100,photo_200,online,last_seen,online_app,online_info",
         )
         if (peerId != null) args["peer_id"] = peerId.toString()
-        val json = call("messages.search", args) ?: return emptyList()
+        // #SEARCH-WEB-GW (2026-11-24): forceWebGateway=true — web-токен (vk1.a.*)
+        // требует web gateway для messages.search. Раньше classic gateway возвращал
+        // пустые результаты (err=3 или silent empty) → «поиск не работает как в вк».
+        val json = call("messages.search", args, forceWebGateway = true) ?: return emptyList()
         return try {
             val resp = json.getAsJsonObject("response") ?: return emptyList()
             val items = resp.getAsJsonArray("items") ?: return emptyList()
