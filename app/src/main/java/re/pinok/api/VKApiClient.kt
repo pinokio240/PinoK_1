@@ -1097,9 +1097,9 @@ class VKApiClient(
             "user_ids" to userIds.joinToString(",") { it.toString() },
             "title" to title,
         )
-        val json = call("messages.createChat", args) ?: return -1L
+        val json = call("messages.createChat", args, forceWebGateway = true) ?: return -1L
         return try {
-            json.getAsJsonObject("response")?.get("chat_id")?.asLong?.let { 2000000000L + it } ?: -1L
+            json.get("response")?.takeIf { !it.isJsonNull }?.asLong?.let { 2000000000L + it } ?: -1L
         } catch (e: Exception) {
             AppLog.e("VKApiClient", "messagesCreateChat error", e)
             -1L
@@ -1137,7 +1137,7 @@ class VKApiClient(
             args["is_disable_stickers_popup_autoplay"] = "1"
             args["permissions"] = com.google.gson.Gson().toJson(permissions)
         }
-        val json = call("messages.editChat", args, forceWebGateway = groupId != null)
+        val json = call("messages.editChat", args, forceWebGateway = true)
             ?: return false
         // Формы ответа: мобильный шлюз {"response":{"success":1}}; web-шлюз
         // (HAR 2026-09-25) {"response":1}. Принимаем обе честно.
@@ -1169,7 +1169,7 @@ class VKApiClient(
                 // Шаг 1: получить upload URL
                 val serverJson = call("photos.getChatUploadServer", mapOf(
                     "chat_id" to chatId.toString(),
-                )) ?: return@withContext false
+                ), forceWebGateway = true) ?: return@withContext false
                 val uploadUrl = serverJson.getAsJsonObject("response")
                     ?.get("upload_url")?.takeIf { !it.isJsonNull }?.asString
                     ?: return@withContext false
@@ -1285,7 +1285,7 @@ class VKApiClient(
             "chat_id" to chatId.toString(),
             "owner_id" to newOwnerId.toString(),
         )) ?: return false
-        return json.getAsJsonObject("response")?.get("success")?.asInt == 1
+        return try { json.get("response")?.takeIf { !it.isJsonNull }?.asInt == 1 } catch (_: Exception) { false }
     }
 
     /** messages.addChatUser — добавить пользователя в чат. */
@@ -1718,7 +1718,7 @@ class VKApiClient(
             "peer_id" to peerId.toString(),
         )
         if (upToMessageId > 0) args["start_message_id"] = upToMessageId.toString()
-        val json = call("messages.markAsRead", args)
+        val json = call("messages.markAsRead", args, forceWebGateway = true)
         return json != null
     }
 
@@ -1735,7 +1735,7 @@ class VKApiClient(
             "peer_id" to peerId.toString(),
             "type" to "typing",
         )
-        val json = call("messages.setActivity", args)
+        val json = call("messages.setActivity", args, forceWebGateway = true)
         return json != null
     }
 
@@ -1749,7 +1749,7 @@ class VKApiClient(
             "message_ids" to messageIds.joinToString(","),
             "answered" to if (answered) "1" else "0",
         )
-        val json = call("messages.markAsAnswered", args) ?: return false
+        val json = call("messages.markAsAnswered", args, forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -1758,7 +1758,7 @@ class VKApiClient(
         if (isOffline()) return false
         val json = call("messages.deleteConversation", mapOf(
             "peer_id" to peerId.toString(),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -1777,7 +1777,7 @@ class VKApiClient(
         if (isOffline()) return false
         val json = call("messages.archiveConversation", mapOf(
             "peer_id" to peerId.toString(),
-        )) ?: return false  // NULL-ЯВНО (Gson)
+        ), forceWebGateway = true) ?: return false  // NULL-ЯВНО (Gson)
         val resp = json.get("response") ?: return false  // NULL-ЯВНО (Gson)
         if (!resp.isJsonPrimitive) return false
         return try {
@@ -1799,7 +1799,7 @@ class VKApiClient(
         if (isOffline()) return false
         val json = call("messages.unarchiveConversation", mapOf(
             "peer_id" to peerId.toString(),
-        )) ?: return false  // NULL-ЯВНО (Gson)
+        ), forceWebGateway = true) ?: return false  // NULL-ЯВНО (Gson)
         val resp = json.get("response") ?: return false  // NULL-ЯВНО (Gson)
         if (!resp.isJsonPrimitive) return false
         return try {
@@ -1815,7 +1815,7 @@ class VKApiClient(
         if (isOffline()) return false
         val json = call("messages.restore", mapOf(
             "message_id" to messageId.toString(),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -2336,7 +2336,7 @@ class VKApiClient(
         val json = call("messages.pin", mapOf(
             "peer_id" to peerId.toString(),
             "message_id" to messageId.toString(),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -2345,7 +2345,7 @@ class VKApiClient(
         if (isOffline()) return false
         val json = call("messages.unpin", mapOf(
             "peer_id" to peerId.toString(),
-        )) ?: return false
+        ), forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -2417,7 +2417,7 @@ class VKApiClient(
             "peer_id" to peerId.toString(),
             "conversation_message_ids" to cmid.toString(),
             "important" to if (important) "1" else "0",
-        ))
+        ), forceWebGateway = true)
         if (json == null) {
             AppLog.w("VKApiClient", "markAsImportant failed (null) peer=$peerId cmid=$cmid important=$important")
             return false
@@ -2795,7 +2795,7 @@ class VKApiClient(
         if (isOffline() || messageIds.isEmpty()) return false
         val args = mutableMapOf("message_ids" to messageIds.joinToString(","))
         peerId?.let { args["peer_id"] = it.toString() }
-        val json = call("messages.markAsSpam", args) ?: return false
+        val json = call("messages.markAsSpam", args, forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -7064,7 +7064,7 @@ class VKApiClient(
         )
         if (spam) args["spam"] = "1"
         if (deleteForAll) args["delete_for_all"] = "1"
-        val json = call("messages.delete", args) ?: return false
+        val json = call("messages.delete", args, forceWebGateway = true) ?: return false
         // Fix #145/#150: VK WEB gateway (web.api.vk.ru) возвращает response в
         // РАЗНЫХ форматах в зависимости от параметров и типа диалога. Замеченные:
         //  - {"response": {"<msgId>": 1}}            — ЛС, без delete_for_all
@@ -7148,7 +7148,7 @@ class VKApiClient(
         )
         if (spam) args["spam"] = "1"
         if (deleteForAll) args["delete_for_all"] = "1"
-        val json = call("messages.delete", args) ?: return false
+        val json = call("messages.delete", args, forceWebGateway = true) ?: return false
         val bodyStr = try { json.toString() } catch (_: Exception) { "<unstringifiable>" }
         AppLog.d("VKApiClient",
             "messagesDeleteByCmid: peerId=$peerId cmid=$cmid deleteForAll=$deleteForAll " +
@@ -7351,7 +7351,7 @@ class VKApiClient(
         // удалённый × файл «не откреплялся»). Непустая строка → перезапись списка.
         if (attachment != null) args["attachment"] = attachment
         if (groupId != null) args["group_id"] = groupId.toString()
-        val json = call("messages.edit", args, forceWebGateway = forceWebGateway) ?: return false
+        val json = call("messages.edit", args, forceWebGateway = true) ?: return false
         return json.has("response")
     }
 
@@ -7408,7 +7408,7 @@ class VKApiClient(
         args["forward"] = forwardJson
         AppLog.i("VKApiClient", "messagesForward: target=$targetPeerId source=$sourcePeerId cmids=$cmids forward=$forwardJson")
 
-        val json = call("messages.send", args) ?: return -1L
+        val json = call("messages.send", args, forceWebGateway = true) ?: return -1L
         return try {
             json.getAsJsonObject("response")?.getAsJsonArray("items")
                 ?.firstOrNull()?.asJsonObject?.get("message_id")?.asLong
@@ -7911,7 +7911,7 @@ class VKApiClient(
         if (isOffline()) return null
         val args = mutableMapOf<String, String>()
         if (groupId != null && groupId != 0L) args["group_id"] = groupId.toString()
-        val json = call("photos.getWallUploadServer", args) ?: return null
+        val json = call("photos.getWallUploadServer", args, forceWebGateway = true) ?: return null
         return try {
             json.getAsJsonObject("response")?.get("upload_url")?.takeIf { !it.isJsonNull }?.asString
         } catch (e: Exception) {
@@ -7931,7 +7931,7 @@ class VKApiClient(
      */
     suspend fun photosGetProfileUploadServer(): String? {
         if (isOffline()) return null
-        val json = call("photos.getProfileUploadServer", emptyMap()) ?: return null
+        val json = call("photos.getProfileUploadServer", emptyMap(), forceWebGateway = true) ?: return null
         return try {
             json.getAsJsonObject("response")?.get("upload_url")?.takeIf { !it.isJsonNull }?.asString
         } catch (e: Exception) {
@@ -12104,7 +12104,7 @@ class VKApiClient(
     suspend fun docsGetMessagesUploadServer(type: String = "audio_message"): String? {
         if (isOffline()) return null
         val args = mapOf("type" to type)
-        val json = call("docs.getMessagesUploadServer", args) ?: return null
+        val json = call("docs.getMessagesUploadServer", args, forceWebGateway = true) ?: return null
         return try {
             val url = json.getAsJsonObject("response")?.get("upload_url")
                 ?.takeIf { !it.isJsonNull }?.asString
@@ -12180,7 +12180,7 @@ class VKApiClient(
             "file" to file,
             "title" to title,
         )
-        val json = call("docs.save", args) ?: return null
+        val json = call("docs.save", args, forceWebGateway = true) ?: return null
         return try {
             val resp = json.getAsJsonObject("response") ?: return null
             val typeEl = resp.get("type")
@@ -12596,7 +12596,7 @@ class VKApiClient(
         if (isOffline()) return null
         // docs.getWallUploadServer — для документов на стенах/в комментариях.
         val args = mapOf("type" to "doc")
-        val json = call("docs.getWallUploadServer", args) ?: return null
+        val json = call("docs.getWallUploadServer", args, forceWebGateway = true) ?: return null
         val uploadUrl = try {
             json.getAsJsonObject("response")?.get("upload_url")
                 ?.takeIf { !it.isJsonNull }?.asString
@@ -12773,7 +12773,7 @@ class VKApiClient(
             "attachment" to attachment,
             "random_id" to randomIdCounter.incrementAndGet().toString(),
         )
-        val json = call("messages.send", args) ?: run {
+        val json = call("messages.send", args, forceWebGateway = true) ?: run {
             AppLog.e("VKApiClient", "sendVoiceMessage ✗ step4 messages.send returned null")
             return -1L
         }
@@ -13178,7 +13178,7 @@ class VKApiClient(
             "peer_id" to peerId.toString(),
             "attachment" to "sticker$stickerId",
             "random_id" to randomId,
-        ))
+        ), forceWebGateway = true)
 
         // Fix #226: захватываем ошибку ПЕРВОЙ попытки ДО второго call() —
         // иначе второй call() перезапишет lastApiErrorCode/lastApiError и мы
@@ -13202,7 +13202,7 @@ class VKApiClient(
                 "peer_id" to peerId.toString(),
                 "sticker_id" to stickerId.toString(),
                 "random_id" to randomIdCounter.incrementAndGet().toString(),
-            )) ?: run {
+            ), forceWebGateway = true) ?: run {
                 // Fix #223/#226: обе попытки провалились. Проверяем ОБЕ ошибки —
                 // если ХОТЯ БЫ ОДНА попытка вернула "sticker not available",
                 // перехватываем и отправляем как картинку.
@@ -13402,7 +13402,7 @@ class VKApiClient(
                     "peer_id" to peerId.toString(),
                     "attachment" to attachment,
                     "random_id" to randomId,
-                )) ?: return@withContext -1L
+                ), forceWebGateway = true) ?: return@withContext -1L
 
                 sendJson.getAsJsonObject("response")?.getAsJsonArray("items")
                     ?.firstOrNull()?.asJsonObject?.get("message_id")?.asLong
@@ -16308,7 +16308,7 @@ class VKApiClient(
         if (isOffline()) return null
         return try {
             val form = FormBody.Builder()
-                .add("v", "5.275")
+                .add("v", VKEndpoints.API_VERSION)
                 .add("access_token", accessToken)
                 .add("env", "production")
                 .build()
